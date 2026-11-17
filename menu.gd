@@ -163,7 +163,7 @@ func show_title() -> void:
 	box.add_theme_constant_override("separation", 6)
 	cc.add_child(box)
 
-	var title := make_label("OMBRES", 58)
+	var title := make_label("OMBRES", 50)
 	title.add_theme_constant_override("outline_size", 12)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
@@ -175,7 +175,7 @@ func show_title() -> void:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(sub)
 
-	box.add_child(make_hero_preview(GameData.character, GameData.weapon, 1.5))
+	box.add_child(make_hero_preview(GameData.character, GameData.weapon, 1.3))
 	var equip_text := "%s  +  %s     COEURS : %d" % [item_name(GameData.character), item_name(GameData.weapon), GameData.max_hearts()]
 	var eq := make_label(equip_text, 14, Color(0.8, 0.8, 0.8))
 	eq.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -193,6 +193,20 @@ func show_title() -> void:
 	var info := make_label(coins_text(), 16)
 	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(info)
+	var snd := make_button("SON : OUI" if GameData.sfx_on else "SON : NON", 14)
+	snd.pressed.connect(func():
+		GameData.sfx_on = not GameData.sfx_on
+		GameData.music_on = GameData.sfx_on
+		GameData.save_game()
+		var main_node = get_tree().current_scene
+		if main_node.sfx:
+			if GameData.music_on:
+				main_node.sfx.play_music(0, false)
+			else:
+				main_node.sfx.stop_music()
+		show_title()
+	)
+	box.add_child(snd)
 
 
 # ---------- Carte des niveaux ----------

@@ -42,6 +42,8 @@ var hurt_time := 0.0
 var ghost_timer := 0.0
 var step_timer := 0.0
 var muzzle_flash := 0.0
+var in_water := false
+var swim_cd := 0.0
 var trail: Array = []       # points de l'écharpe / cape (coordonnées du monde)
 
 var sprite: Sprite2D
@@ -449,6 +451,10 @@ func _ready() -> void:
 		add_child(weapon_layer)
 		weapon_layer.draw.connect(draw_weapon)
 	add_to_group("player")
+	# pentes : marcher dessus sans glisser ni décoller
+	floor_max_angle = deg_to_rad(50.0)
+	floor_snap_length = 14.0
+	floor_constant_speed = true
 	apply_stats()
 
 
@@ -531,7 +537,21 @@ func _physics_process(delta: float) -> void:
 		return
 
 	gliding = false
-	if not on_floor:
+	update_water(delta)
+	if in_water:
+		# dans l'eau : on coule doucement, on nage en appuyant sur le saut
+		velocity.y = minf(velocity.y + GRAVITY * 0.3 * delta, 110.0)
+		swim_cd = maxf(0.0, swim_cd - delta)
+		if can_control and swim_cd <= 0.0 and (Input.is_action_pressed("ui_accept") or GameData.has_tap("ui_accept")):
+			GameData.clear_tap("ui_accept")
+			swim_cd = 0.28
+			# à la surface, on saute hors de l'eau
+			var at_surface: bool = level != null and not level.is_water(global_position + Vector2(0, -20))
+			velocity.y = jump_velocity * 0.9 if at_surface else -210.0
+			squash = Vector2(0.85, 1.15)
+			if level:
+				level.fx.burst(global_position + Vector2(0, -10), 4, 30.0, Color(1, 1, 1, 0.7), 0.6, 2.0, -60.0)
+	elif not on_floor:
 		velocity.y = minf(velocity.y + GRAVITY * delta, MAX_FALL)
 		# le spectre plane en gardant le saut appuyé
 		if GameData.char_has("plane") and velocity.y > GLIDE_FALL and Input.is_action_pressed("ui_accept"):
@@ -541,7 +561,8 @@ func _physics_process(delta: float) -> void:
 	var direction := 0.0
 	if can_control and hurt_time <= 0.0:
 		direction = Input.get_axis("ui_left", "ui_right")
-		handle_jump()
+		if not in_water:
+			handle_jump()
 		handle_attack()
 		handle_fire()
 		handle_dash()
@@ -550,13 +571,25 @@ func _physics_process(delta: float) -> void:
 		hurt_time -= delta
 		velocity.x = move_toward(velocity.x, 0.0, 500.0 * delta)
 	elif direction != 0.0:
-		velocity.x = direction * speed
+		velocity.x = direction * speed * (0.7 if in_water else 1.0)
 		facing = signf(direction)
 	else:
 		velocity.x = move_toward(velocity.x, 0.0, speed * 12.0 * delta)
 
 	move_and_slide()
 	update_animation(delta)
+
+
+func update_water(_delta: float) -> void:
+	var now: bool = level != null and level.is_water(global_position)
+	if now != in_water and level:
+		level.sound("plouf")
+		level.fx.burst(global_position + Vector2(0, -6), 14, 110.0, Color(1, 1, 1, 0.8), 0.5, 2.5, 500.0, 120.0)
+		if now:
+			velocity.y *= 0.3
+	in_water = now
+	if in_water and level and randf() < 0.05:
+		level.fx.spawn(global_position + Vector2(facing * 6.0, -10.0), Vector2(randf_range(-5, 5), -40), Color(1, 1, 1, 0.6), 1.0, 2.0)
 
 
 # Écharpe / cape : chaque point suit le précédent, tombe un peu et flotte au vent
@@ -593,11 +626,14 @@ func handle_jump() -> void:
 	var wants := Input.is_action_pressed("ui_accept") or GameData.has_tap("ui_accept")
 	if wants and air_time < COYOTE_TIME and velocity.y >= 0.0:
 		do_jump()
+		if level:
+			level.sound("saut")
 	elif GameData.has_tap("ui_accept") and air_time >= COYOTE_TIME and jumps_left > 0:
 		# double saut : il faut un nouvel appui
 		jumps_left -= 1
 		do_jump()
 		if level:
+			level.sound("double_saut")
 			level.fx.ring(global_position + Vector2(0, 14), 12.0, Color.WHITE, 0.3)
 			level.fx.burst(global_position + Vector2(0, 14), 8, 70.0, Color.WHITE, 0.3, 2.0)
 
@@ -621,6 +657,8 @@ func handle_attack() -> void:
 		attack_time = attack_length
 		attack_cd = attack_length + 0.06
 		attack_hit_done = false
+		if level:
+			level.sound("coup")
 
 
 # Armes à feu
@@ -629,6 +667,8 @@ func shoot() -> void:
 	attack_cd = GameData.attack_length()
 	attack_time = 0.14
 	muzzle_flash = 0.07
+	if level:
+		level.sound(id)
 	var muzzle := global_position + Vector2(facing * (9.0 + muzzle_length(id)), 1.0)
 	if level:
 		var count: int = GameData.weapon_stat("nombre")
@@ -666,6 +706,7 @@ func handle_dash() -> void:
 		dash_cd = 0.45 if GameData.character == "ninja" else 0.7
 		attack_time = 0.0
 		if level:
+			level.sound("ruee")
 			level.fx.burst(global_position, 10, 90.0, Color.WHITE, 0.35, 2.0)
 
 
@@ -696,6 +737,8 @@ func weapon_special() -> void:
 func landed() -> void:
 	squash = Vector2(1.3, 0.75)
 	dust(7)
+	if level:
+		level.sound("atterrir", 0.15)
 
 
 func dust(count: int) -> void:
@@ -730,6 +773,8 @@ func bounce() -> void:
 
 
 func spring(force: float) -> void:
+	if level:
+		level.sound("ressort", 0.02)
 	velocity.y = force
 	air_time = COYOTE_TIME
 	jumps_left = 1 if GameData.has_double_jump() else 0

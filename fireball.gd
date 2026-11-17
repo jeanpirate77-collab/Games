@@ -48,11 +48,16 @@ func _ready() -> void:
 		"poison":
 			radius = 7.0
 			gravity = 500.0
+		"boulet":
+			radius = 9.0
+			life = 4.0
 		"flamme":
 			radius = 8.0
 			life = 3.0
 	if level and team == "joueur" and kind != "plomb":
-		level.add_light(self, 0.6 if kind == "balle" or kind == "carreau" else 0.9, 0.9)
+		var l = level.add_light(self, 0.6 if kind == "balle" or kind == "carreau" else 0.9, 0.9)
+		if kind == "feu":
+			l.color = Color(1, 0.7, 0.4)
 	elif level and kind == "flamme":
 		level.add_light(self, 0.8, 0.8)
 
@@ -93,13 +98,14 @@ func _draw() -> void:
 	match kind:
 		"feu":
 			var flick := 1.0 + 0.15 * sin(t * 40.0)
-			draw_circle(Vector2.ZERO, 12.0 * flick, Color(1, 1, 1, 0.15))
-			draw_circle(Vector2.ZERO, 7.0 * flick, Color.WHITE)
+			draw_circle(Vector2.ZERO, 12.0 * flick, Color(1, 0.55, 0.15, 0.25))
+			draw_circle(Vector2.ZERO, 8.0 * flick, Color(1, 0.5, 0.12))
+			draw_circle(Vector2.ZERO, 5.0 * flick, Color(1, 0.9, 0.5))
 			# flamme qui part vers l'arrière
 			var back := -signf(velocity.x)
 			var tail := PackedVector2Array([Vector2(0, -6), Vector2(back * 16.0, sin(t * 30.0) * 3.0), Vector2(0, 6)])
-			draw_colored_polygon(tail, Color(1, 1, 1, 0.8))
-			draw_circle(Vector2(signf(velocity.x) * 2.0, 0), 3.0, Color(0.15, 0.15, 0.15))
+			draw_colored_polygon(tail, Color(1, 0.55, 0.15, 0.8))
+			draw_circle(Vector2(signf(velocity.x) * 2.0, 0), 2.5, Color.WHITE)
 		"plume":
 			var ang := atan2(velocity.y, velocity.x) + sin(t * 10.0) * 0.4
 			var d := Vector2(cos(ang), sin(ang))
@@ -133,6 +139,13 @@ func _draw() -> void:
 			draw_colored_polygon(PackedVector2Array([dir * 11.0, dir * 4.0 + n * 3.0, dir * 4.0 - n * 3.0]), Color.WHITE)
 			draw_line(-dir * 12.0, -dir * 8.0 + n * 3.0, Color(0.7, 0.7, 0.7), 1.5)
 			draw_line(-dir * 12.0, -dir * 8.0 - n * 3.0, Color(0.7, 0.7, 0.7), 1.5)
+		"boulet":
+			draw_circle(Vector2.ZERO, 10.5, Color.WHITE)
+			draw_circle(Vector2.ZERO, 9.0, Color(0.12, 0.12, 0.12))
+			draw_circle(Vector2(-3, -3), 2.5, Color(1, 1, 1, 0.6))
+			var b2 := -signf(velocity.x)
+			for i in 3:
+				draw_circle(Vector2(b2 * (14.0 + i * 7.0), randf_range(-2, 2)), 3.0 - i * 0.7, Color(0.8, 0.8, 0.8, 0.4 - i * 0.1))
 		"poison":
 			draw_circle(Vector2.ZERO, 9.0, Color(1, 1, 1, 0.12))
 			draw_circle(Vector2.ZERO, 6.5, Color(0.2, 0.2, 0.2))
@@ -142,11 +155,11 @@ func _draw() -> void:
 		"flamme":
 			var flick := 1.0 + 0.2 * sin(t * 35.0)
 			var back := -velocity.normalized()
-			draw_circle(Vector2.ZERO, 13.0 * flick, Color(1, 1, 1, 0.15))
+			draw_circle(Vector2.ZERO, 13.0 * flick, Color(1, 0.5, 0.1, 0.2))
 			var tail := PackedVector2Array([Vector2(back.y, -back.x) * 7.0, back * 20.0 + Vector2(sin(t * 30.0), cos(t * 27.0)) * 3.0, -Vector2(back.y, -back.x) * 7.0])
-			draw_colored_polygon(tail, Color(1, 1, 1, 0.85))
-			draw_circle(Vector2.ZERO, 7.0 * flick, Color.WHITE)
-			draw_circle(back * 2.0, 3.5, Color(0.55, 0.55, 0.55))
+			draw_colored_polygon(tail, Color(1, 0.45, 0.1, 0.85))
+			draw_circle(Vector2.ZERO, 7.0 * flick, Color(1, 0.75, 0.3))
+			draw_circle(back * 2.0, 3.5, Color(1, 0.95, 0.7))
 		"croissant":
 			var d := signf(velocity.x)
 			draw_circle(Vector2.ZERO, 14.0, Color(1, 1, 1, 0.12))

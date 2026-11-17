@@ -517,6 +517,9 @@ func take_damage(amount: int, from_x: float) -> bool:
 		return false
 	hp -= amount
 	flash = 0.12
+	level.damage_number(position, amount)
+	if hp > 0:
+		level.sound("touche")
 	if kind == "chauve-souris" or kind == "spectre":
 		position.x += signf(position.x - from_x) * 14.0
 		state = "retour"

@@ -32,6 +32,7 @@ var arena_right := 768.0
 var ground_y := 320.0
 var half := Vector2(30, 20)
 var tongue := 0.0         # longueur de la langue du crapaud
+var tongue_dir := Vector2(1, 0)   # direction de la langue (visée sur le joueur)
 var hist: Array = []      # positions passées de la tête du dragon (pour le corps)
 
 
@@ -46,7 +47,7 @@ func _ready() -> void:
 		"crapaud":
 			display_name = "LE CRAPAUD GÉANT"
 			max_hp = 24
-			half = Vector2(32, 20)
+			half = Vector2(34, 24)
 			position.y = -80.0
 		"dragon":
 			display_name = "LE DRAGON DE BRUME"
@@ -74,15 +75,23 @@ func get_extra_rects() -> Array:
 	if dead or state == "intro":
 		return out
 	if kind == "crapaud" and tongue > 4.0:
-		var mouth := position + Vector2(facing * 24.0, 2.0)
-		var x0 := mouth.x if facing > 0.0 else mouth.x - tongue
-		out.append(Rect2(x0, mouth.y - 5.0, tongue, 10.0))
+		# petites zones tout le long de la langue (elle peut viser en biais)
+		var mouth := tongue_mouth()
+		var d := 0.0
+		while d <= tongue:
+			var q := mouth + tongue_dir * d
+			out.append(Rect2(q - Vector2(7, 7), Vector2(14, 14)))
+			d += 12.0
 	elif kind == "dragon":
 		for i in range(1, 10):
 			var p := segment_pos(i)
 			var r := 11.0 - i * 0.5
 			out.append(Rect2(p - Vector2(r, r), Vector2(r, r) * 2.0))
 	return out
+
+
+func tongue_mouth() -> Vector2:
+	return position + Vector2(facing * 26.0, -2.0)
 
 
 func get_hit_rect() -> Rect2:
@@ -102,6 +111,8 @@ func take_damage(amount: int, _from_x: float) -> bool:
 		return false
 	hp -= amount
 	flash = 0.12
+	level.damage_number(position + Vector2(0, -half.y), amount)
+	level.sound("touche")
 	level.fx.burst(position, 8, 120.0, Color.WHITE, 0.3, 2.5)
 	if not phase2 and hp <= max_hp * 0.5:
 		phase2 = true
@@ -112,6 +123,7 @@ func take_damage(amount: int, _from_x: float) -> bool:
 		dead = true
 		state = "mort"
 		timer = 2.0
+		level.sound("boss", 0.0)
 		return true
 	return false
 
@@ -301,6 +313,13 @@ func update_crapaud(delta: float) -> void:
 				attack_index += 1
 				timer = 0.4
 				match state:
+					"langue":
+						# vise le joueur (jamais vers le sol)
+						var aim_dir := (p - tongue_mouth()).normalized()
+						aim_dir.x = facing * maxf(absf(aim_dir.x), 0.5)
+						aim_dir.y = clampf(aim_dir.y, -0.8, 0.1)
+						tongue_dir = aim_dir.normalized()
+						level.sound("boss", 0.1)
 					"saut":
 						vel = Vector2(clampf((p.x - position.x) / 0.8, -300.0, 300.0), -520.0)
 					"crache":
@@ -664,14 +683,19 @@ func draw_crapaud() -> void:
 		draw_circle(e + to_p * 2.5, 3.5 if not phase2 else 4.5, Color.BLACK if flash <= 0.0 else Color.WHITE)
 		draw_circle(e + to_p * 2.5 + Vector2(-1, -1), 1.0, Color.WHITE)
 	# bouche
-	var mouth := Vector2(f * 24.0, 2.0 + crouch)
+	var mouth := tongue_mouth() - position + Vector2(0, crouch)
 	if tongue > 0.0:
-		draw_colored_polygon(PackedVector2Array([Vector2(f * 6.0, 0.0 + crouch), mouth + Vector2(f * 4.0, -6.0), mouth + Vector2(f * 4.0, 6.0)]), Color.BLACK)
-		var tip := mouth + Vector2(f * tongue, 0)
-		draw_line(mouth, tip, Color.BLACK, 8.0)
-		draw_line(mouth, tip, Color(0.9, 0.9, 0.9), 5.0)
-		draw_circle(tip, 7.0, Color.BLACK)
-		draw_circle(tip, 5.5, Color.WHITE)
+		draw_colored_polygon(PackedVector2Array([Vector2(f * 6.0, -2.0 + crouch), mouth + Vector2(f * 4.0, -7.0), mouth + Vector2(f * 4.0, 7.0)]), Color.BLACK)
+		var tip := mouth + tongue_dir * tongue
+		draw_line(mouth, tip, Color.BLACK, 9.0)
+		draw_line(mouth, tip, Color(0.95, 0.45, 0.55), 6.0)
+		draw_circle(tip, 8.0, Color.BLACK)
+		draw_circle(tip, 6.5, Color(0.95, 0.5, 0.6))
+	elif state == "langue" and timer > 0.0:
+		# avertissement : la gueule s'ouvre et un trait montre la visée
+		draw_colored_polygon(PackedVector2Array([Vector2(f * 6.0, -2.0 + crouch), mouth + Vector2(f * 4.0, -5.0), mouth + Vector2(f * 4.0, 5.0)]), Color.BLACK)
+		var k := 1.0 - timer / 0.4
+		draw_line(mouth, mouth + tongue_dir * 200.0 * k, Color(1, 0.3, 0.3, 0.35), 2.0)
 	else:
 		var smile := PackedVector2Array()
 		for i in 7:

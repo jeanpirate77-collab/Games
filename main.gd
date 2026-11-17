@@ -9,12 +9,15 @@ const PickupScript = preload("res://pickup.gd")
 const FxScript = preload("res://fx.gd")
 const MenuScript = preload("res://menu.gd")
 const ObstacleScript = preload("res://obstacle.gd")
+const SfxScript = preload("res://sfx.gd")
 
 const TILE := 32
 const INVINCIBLE_TIME := 1.2
 const PARALLAX_W := 1200.0
 const ENEMY_CHARS := {"w": "marcheur", "s": "tireur", "f": "chauve-souris", "j": "sauteur", "g": "spectre", "e": "oeil", "K": "chevalier"}
-const OBSTACLE_CHARS := {"a": "acide", "x": "fragile", "k": "ressort", "r": "scie", "l": "flammes", "u": "stalactite", "q": "pendule", "T": "torche"}
+const OBSTACLE_CHARS := {"a": "acide", "x": "fragile", "k": "ressort", "r": "scie", "l": "flammes", "u": "stalactite", "q": "pendule", "T": "torche", "O": "boule", "n": "canon", "V": "vent"}
+const VIEW_HEIGHT := 384.0      # hauteur du monde visible (12 cases) ; les niveaux plus hauts défilent
+const HEART_RED := Color(0.92, 0.16, 0.22)
 const HEART := [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
 const POST_FX := true            # grain + lueur « film noir » (mettre false si l'écran devient noir)
 const DARKNESS := [0.62, 0.42, 0.55, 0.5, 0.8]   # luminosité ambiante par monde (forêt, grotte, château, marais, nuages)
@@ -65,6 +68,9 @@ var touch = null
 var light_tex: GradientTexture2D
 var door_light: PointLight2D
 var fog_art: Node2D
+var sfx = null
+var water_cells: Array = []
+var water_layer: Node2D
 var tile_chunks: Array = []
 var canvas: CanvasItem = null   # tranche de décor en cours de dessin
 
@@ -92,6 +98,8 @@ func _ready() -> void:
 		$StaticBody2D.queue_free()
 	fx = FxScript.new()
 	add_child(fx)
+	sfx = SfxScript.new()
+	add_child(sfx)
 	get_viewport().size_changed.connect(on_resize)
 	if GameData.screen == "niveau":
 		start_level()
@@ -158,6 +166,7 @@ func start_menu() -> void:
 	setup_foreground()
 	setup_vignette()
 	add_child(MenuScript.new())
+	sfx.play_music(0, false)
 
 
 # =====================================================================
@@ -190,6 +199,13 @@ func start_level() -> void:
 	move_child(deco, 0)  # dessiné avant le joueur
 	deco.draw.connect(draw_deco)
 	build_tile_chunks()
+	if not water_cells.is_empty():
+		# l'eau est dessinée DEVANT le joueur : il a l'air vraiment plongé dedans
+		water_layer = Node2D.new()
+		water_layer.z_index = 5
+		add_child(water_layer)
+		water_layer.draw.connect(draw_water)
+	sfx.play_music(world, level_data["boss"] != "")
 	setup_camera()
 	setup_hud()
 	setup_foreground()
@@ -239,12 +255,19 @@ func build_level() -> void:
 					p.shard_id = shard_count
 					shard_count += 1
 					set_cell(c, r, ".")
-				"B":
+				"B", "D", "c":
 					add_crate(c, r)
-				"m":
-					add_mover(center, mover_index)
+				"/", "\\":
+					add_slope(solid_body, c, r, ch)
+				"m", "M":
+					add_mover(center, mover_index, ch == "M")
 					mover_index += 1
 					set_cell(c, r, ".")
+				"$":
+					spawn_pickup("tresor", center)
+					set_cell(c, r, ".")
+				"~":
+					water_cells.append(Vector2i(c, r))
 				"Z":
 					spawn_boss(center)
 					set_cell(c, r, ".")
@@ -269,6 +292,20 @@ func add_run(body: StaticBody2D, c0: int, c1: int, r: int, one_way: bool) -> voi
 	body.add_child(shape)
 
 
+# Pente à 45° : "/" monte vers la droite, "\\" descend vers la droite
+func add_slope(body: StaticBody2D, c: int, r: int, ch: String) -> void:
+	var shape := CollisionShape2D.new()
+	var poly := ConvexPolygonShape2D.new()
+	var x := float(c * TILE)
+	var y := float(r * TILE)
+	if ch == "/":
+		poly.points = PackedVector2Array([Vector2(x, y + TILE), Vector2(x + TILE, y), Vector2(x + TILE, y + TILE)])
+	else:
+		poly.points = PackedVector2Array([Vector2(x, y), Vector2(x + TILE, y + TILE), Vector2(x, y + TILE)])
+	shape.shape = poly
+	body.add_child(shape)
+
+
 func add_crate(c: int, r: int) -> void:
 	var body := StaticBody2D.new()
 	var shape := CollisionShape2D.new()
@@ -281,7 +318,7 @@ func add_crate(c: int, r: int) -> void:
 	crates[Vector2i(c, r)] = body
 
 
-func add_mover(center: Vector2, index: int) -> void:
+func add_mover(center: Vector2, index: int, vertical := false) -> void:
 	var body := AnimatableBody2D.new()
 	var shape := CollisionShape2D.new()
 	var rect := RectangleShape2D.new()
@@ -292,12 +329,13 @@ func add_mover(center: Vector2, index: int) -> void:
 	body.position = Vector2(center.x, center.y - 10.0)
 	add_child(body)
 	body.draw.connect(draw_mover.bind(body))
-	movers.append({"body": body, "base": body.position, "phase": PI * (index % 2)})
+	movers.append({"body": body, "base": body.position, "phase": PI * (index % 2), "vertical": vertical})
 
 
 func spawn_boss(center: Vector2) -> void:
 	var gy := center.y
-	while not is_solid(Vector2(center.x, gy)) and gy < rows * TILE:
+	var gc := int(center.x / TILE)
+	while gy < rows * TILE and not "#a/\\=".contains(cell(gc, int(gy / TILE))):
 		gy += TILE
 	boss = BossScript.new()
 	boss.kind = level_data["boss"]
@@ -309,6 +347,7 @@ func spawn_boss(center: Vector2) -> void:
 	boss.position = center
 	add_child(boss)
 	add_light(boss, 1.6, 0.7)
+	sound("boss", 0.0)
 	exit_open = false
 	exit_alpha = 0.0
 
@@ -336,7 +375,32 @@ func is_solid(p: Vector2, platforms := false) -> bool:
 		return false
 	var line: String = grid[r]
 	var ch := line[c]
-	return ch == "#" or ch == "B" or (platforms and ch == "=")
+	if ch == "/" or ch == "\\":
+		# pente : solide seulement sous la diagonale
+		var lx := p.x - c * TILE
+		var ly := p.y - r * TILE
+		return ly >= TILE - lx if ch == "/" else ly >= lx
+	return ch == "#" or ch == "B" or ch == "D" or ch == "c" or (platforms and ch == "=")
+
+
+func is_water(p: Vector2) -> bool:
+	var c := int(floor(p.x / TILE))
+	var r := int(floor(p.y / TILE))
+	if c < 0 or c >= cols or r < 0 or r >= rows:
+		return false
+	var line: String = grid[r]
+	return line[c] == "~"
+
+
+# Case de terrain plein (pour le dessin : herbe, bords, profondeur)
+func ground_at(c: int, r: int) -> bool:
+	var ch := cell(c, r)
+	return ch == "#" or ch == "/" or ch == "\\"
+
+
+func sound(sound_name: String, jitter := 0.06) -> void:
+	if sfx:
+		sfx.play(sound_name, jitter)
 
 
 func world_bottom() -> float:
@@ -419,6 +483,9 @@ func setup_camera() -> void:
 	camera.limit_bottom = rows * TILE
 	camera.position_smoothing_enabled = true
 	camera.position_smoothing_speed = 7.0
+	camera.drag_vertical_enabled = true
+	camera.drag_top_margin = 0.3
+	camera.drag_bottom_margin = 0.15
 	player.add_child(camera)
 	camera.make_current()
 	update_zoom()
@@ -427,7 +494,7 @@ func setup_camera() -> void:
 func update_zoom() -> void:
 	# la hauteur du niveau (12 cases) remplit exactement la hauteur de l'écran
 	var h := get_viewport().get_visible_rect().size.y
-	var view_h := float(rows * TILE) if in_level else 384.0
+	var view_h := VIEW_HEIGHT
 	var z := h / view_h
 	camera.zoom = Vector2(z, z)
 
@@ -496,8 +563,7 @@ void fragment() {
 	vec3 col = base + glow * bloom_amount;
 	float n = hash(floor(FRAGCOORD.xy / 2.0) + vec2(fract(TIME * 7.0) * 113.0));
 	col += (n - 0.5) * grain_amount;
-	float g = dot(col, vec3(0.299, 0.587, 0.114));
-	COLOR = vec4(vec3(g), 1.0);
+	COLOR = vec4(col, 1.0);
 }
 """
 
@@ -573,9 +639,19 @@ func setup_foreground() -> void:
 	px.repeat_times = 3
 	px.z_index = 15
 	var art := Node2D.new()
+	art.position.y = bottom_shift()
 	px.add_child(art)
-	art.draw.connect(draw_foreground.bind(art))
+	art.draw.connect(draw_foreground.bind(art, "bas"))
 	add_child(px)
+	var px_top := Parallax2D.new()
+	px_top.scroll_scale = Vector2(1.3, 1.0)
+	px_top.repeat_size = Vector2(900, 0)
+	px_top.repeat_times = 3
+	px_top.z_index = 15
+	var art_top := Node2D.new()
+	px_top.add_child(art_top)
+	art_top.draw.connect(draw_foreground.bind(art_top, "haut"))
+	add_child(px_top)
 	# brume qui avance doucement
 	var fog := Parallax2D.new()
 	fog.scroll_scale = Vector2(0.8, 1.0)
@@ -583,17 +659,18 @@ func setup_foreground() -> void:
 	fog.repeat_times = 3
 	fog.z_index = 14
 	fog_art = Node2D.new()
+	fog_art.position.y = bottom_shift()
 	fog.add_child(fog_art)
 	fog_art.draw.connect(draw_fog)
 	add_child(fog)
 
 
-func draw_foreground(art: Node2D) -> void:
+func draw_foreground(art: Node2D, part: String) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 77 + world
 	var ink := Color(0, 0, 0, 0.92)
 	# bas de l'écran : herbes / rochers / tombes
-	var x := 0.0
+	var x := 0.0 if part == "bas" else 900.0
 	while x < 900.0:
 		match world:
 			3:
@@ -627,7 +704,7 @@ func draw_foreground(art: Node2D) -> void:
 					art.draw_colored_polygon(PackedVector2Array([Vector2(bx, 400), Vector2(bx + 5, 400), Vector2(bx + 2.5 + rng.randf_range(-6, 6), 384 - h)]), ink)
 				x += rng.randf_range(40, 140)
 	# haut de l'écran : lianes / stalactites / chaînes
-	x = rng.randf_range(0, 60)
+	x = rng.randf_range(0, 60) if part == "haut" else 900.0
 	while x < 900.0:
 		match world:
 			4:
@@ -727,6 +804,19 @@ func show_banner(text: String) -> void:
 	tw.tween_property(banner, "modulate:a", 0.0, 0.8)
 
 
+# Petit chiffre qui saute au-dessus d'un ennemi touché
+func damage_number(pos: Vector2, amount: int) -> void:
+	var l := MenuScript.make_label(str(amount), 13, Color(1, 0.85, 0.35) if amount >= 3 else Color.WHITE)
+	l.position = pos + Vector2(randf_range(-14, 4), -30)
+	l.z_index = 30
+	add_child(l)
+	var tw := l.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(l, "position:y", l.position.y - 18.0, 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tw.tween_property(l, "modulate:a", 0.0, 0.3).set_delay(0.35)
+	tw.chain().tween_callback(l.queue_free)
+
+
 func popup(text: String, pos: Vector2) -> void:
 	var l := MenuScript.make_label(text, 14)
 	l.position = pos + Vector2(-40, -40)
@@ -752,7 +842,10 @@ func _physics_process(delta: float) -> void:
 	for m in movers:
 		var body: AnimatableBody2D = m["body"]
 		var base: Vector2 = m["base"]
-		body.position.x = base.x + sin(time * 1.1 + float(m["phase"])) * 64.0
+		if m["vertical"]:
+			body.position.y = base.y + sin(time * 0.9 + float(m["phase"])) * 64.0
+		else:
+			body.position.x = base.x + sin(time * 1.1 + float(m["phase"])) * 64.0
 		body.queue_redraw()
 	if finished:
 		return
@@ -780,6 +873,7 @@ func check_checkpoints() -> void:
 			cp["on"] = true
 			respawn_point = cp["pos"]
 			popup("POINT DE PASSAGE", cp["pos"])
+			sound("point")
 			fx.ring(cp["pos"] + Vector2(0, -14), 10.0, Color.WHITE, 0.5)
 			fx.burst(cp["pos"] + Vector2(0, -14), 12, 80.0, Color.WHITE, 0.6, 2.0, 0.0, 30.0)
 
@@ -896,6 +990,7 @@ func hurt_player(amount: int, from_x: float) -> bool:
 	if invincible > 0.0 or finished or player.dead:
 		return false
 	hearts -= amount
+	sound("blesse")
 	shake(7.0)
 	fx.burst(player.global_position, 14, 150.0, Color.WHITE, 0.4, 2.5)
 	freeze(0.07)
@@ -960,6 +1055,7 @@ func _on_player_melee(hit_rect: Rect2, damage: int) -> void:
 
 
 func _on_player_fire(from_pos: Vector2, dir_x: float) -> void:
+	sound("feu")
 	var angles := [0.0]
 	if GameData.get_level("feu") >= 3:
 		angles = [-0.22, 0.0, 0.22]
@@ -983,15 +1079,27 @@ func break_crate(c: int, r: int) -> void:
 		return
 	crates[key].queue_free()
 	crates.erase(key)
+	var kind := cell(c, r)
 	set_cell(c, r, ".")
 	var center := Vector2(c * TILE + 16, r * TILE + 16)
 	fx.burst(center, 16, 160.0, Color.WHITE, 0.7, 3.5, 600.0, 120.0)
-	for i in 3:
+	sound("caisse")
+	var n := 3
+	if kind == "D":
+		n = 1
+		shake(4.0)
+	elif kind == "c":
+		n = 10
+		sound("tresor")
+		popup("TRÉSOR !", center)
+		fx.burst(center, 20, 120.0, Color(1, 0.85, 0.3), 0.8, 2.5, 0.0, 60.0)
+	for i in n:
 		spawn_pickup("piece", center, true)
 	redraw_tiles()
 
 
 func on_enemy_killed(e) -> void:
+	sound("tue")
 	fx.burst(e.position, 18, 160.0, Color.WHITE, 0.5, 3.0)
 	fx.ring(e.position, 10.0, Color.WHITE, 0.35)
 	for i in e.coins:
@@ -1004,6 +1112,7 @@ func on_boss_defeated(b) -> void:
 	exit_open = true
 	boss_label.visible = false
 	popup("VICTOIRE !", b.position)
+	sound("explosion", 0.0)
 	for i in 15:
 		spawn_pickup("piece", b.position, true)
 	spawn_pickup("coeur", b.position, true)
@@ -1019,15 +1128,23 @@ func collect(p) -> void:
 	match p.kind:
 		"piece":
 			level_coins += 1
-			fx.burst(p.position, 5, 60.0, Color.WHITE, 0.3, 2.0)
+			fx.burst(p.position, 5, 60.0, Color(1, 0.85, 0.35), 0.3, 2.0)
+			sound("piece", 0.03)
+		"tresor":
+			level_coins += 10
+			popup("+10", p.position)
+			fx.burst(p.position, 16, 100.0, Color(1, 0.85, 0.35), 0.6, 2.5)
+			sound("tresor")
 		"coeur":
 			hearts = mini(max_hearts, hearts + 1)
+			sound("coeur")
 			popup("+1 COEUR", p.position)
 			fx.ring(p.position, 10.0, Color.WHITE, 0.4)
 		"eclat":
 			if p.shard_id >= 0 and p.shard_id < 3:
 				shards_found[p.shard_id] = true
 			popup("ÉCLAT DE LUNE !", p.position)
+			sound("eclat")
 			fx.ring(p.position, 14.0, Color.WHITE, 0.6)
 			fx.burst(p.position, 20, 120.0, Color.WHITE, 0.8, 2.5)
 			freeze(0.06)
@@ -1037,6 +1154,7 @@ func collect(p) -> void:
 			max_hearts += 1
 			hearts = max_hearts
 			popup("+1 COEUR MAXIMUM !", p.position)
+			sound("eclat")
 			fx.ring(p.position, 20.0, Color.WHITE, 0.8)
 			fx.burst(p.position, 30, 160.0, Color.WHITE, 0.9, 3.0)
 			freeze(0.1)
@@ -1048,6 +1166,8 @@ func collect(p) -> void:
 # =====================================================================
 
 func level_complete() -> void:
+	sound("porte", 0.0)
+	sfx.stop_music()
 	finished = true
 	player.can_control = false
 	player.velocity = Vector2.ZERO
@@ -1085,6 +1205,8 @@ func level_complete() -> void:
 
 
 func player_died() -> void:
+	sound("mort", 0.0)
+	sfx.stop_music()
 	finished = true
 	player.die()
 	touch.release_all()
@@ -1106,7 +1228,24 @@ func toggle_pause() -> void:
 		return
 	get_tree().paused = true
 	touch.release_all()
-	show_panel("PAUSE", level_data["nom"], [["REPRENDRE", resume], ["RECOMMENCER", restart], ["CARTE", go_map]])
+	show_panel("PAUSE", level_data["nom"], [["REPRENDRE", resume], ["RECOMMENCER", restart], ["CARTE", go_map], [sound_label(), toggle_sound]])
+
+
+func sound_label() -> String:
+	return "SON : OUI" if GameData.sfx_on else "SON : NON"
+
+
+func toggle_sound() -> void:
+	# coupe ou remet les bruitages ET la musique
+	GameData.sfx_on = not GameData.sfx_on
+	GameData.music_on = GameData.sfx_on
+	GameData.save_game()
+	if GameData.music_on:
+		sfx.play_music(world, level_data["boss"] != "")
+	else:
+		sfx.stop_music()
+	toggle_pause()
+	toggle_pause()
 
 
 func resume() -> void:
@@ -1190,6 +1329,8 @@ func _process(delta: float) -> void:
 		deco.queue_redraw()
 	if fog_art:
 		fog_art.queue_redraw()
+	if water_layer:
+		water_layer.queue_redraw()
 	var tt := Time.get_ticks_msec() * 0.001
 	for cp in checkpoints:
 		if cp.has("light"):
@@ -1226,7 +1367,7 @@ func ambient(delta: float) -> void:
 			fx.spawn(p, Vector2(randf_range(-12, 12), randf_range(-14, -4)), Color(1, 1, 1, 0.9), 2.5, 2.0)
 		1:
 			# gouttes qui tombent du plafond
-			fx.spawn(Vector2(p.x, 66.0), Vector2(0, 20), Color(0.85, 0.85, 0.85, 0.8), 1.2, 2.0, 450.0)
+			fx.spawn(Vector2(p.x, center.y - half.y), Vector2(0, 20), Color(0.85, 0.85, 0.85, 0.8), 1.6, 2.0, 450.0)
 		2:
 			# cendres
 			fx.spawn(Vector2(p.x, center.y - half.y), Vector2(randf_range(-25, -5), 35), Color(0.7, 0.7, 0.7, 0.6), 5.0, 2.0)
@@ -1325,7 +1466,9 @@ func draw_heart(pos: Vector2, full: bool) -> void:
 		var line: String = HEART[y]
 		for x in 7:
 			if line[x] == "#":
-				var col := Color.WHITE if full else Color(0.28, 0.28, 0.28)
+				var col := HEART_RED if full else Color(0.28, 0.28, 0.28)
+				if full and y == 1 and (x == 1 or x == 2):
+					col = Color(1, 0.6, 0.62)  # petit reflet
 				hud_draw.draw_rect(Rect2(pos + Vector2(x, y) * 3.0, Vector2(3, 3)), col)
 
 
@@ -1359,6 +1502,11 @@ func setup_background() -> void:
 			add_parallax(0.4, draw_near_forest)
 
 
+# Les décors sont dessinés pour un niveau de 12 cases : on les cale sur le bas du niveau
+func bottom_shift() -> float:
+	return float(maxi(0, rows - 12) * TILE) if in_level else 0.0
+
+
 func add_parallax(scroll: float, fn: Callable) -> void:
 	var px := Parallax2D.new()
 	px.scroll_scale = Vector2(scroll, 1.0)
@@ -1366,6 +1514,7 @@ func add_parallax(scroll: float, fn: Callable) -> void:
 	px.repeat_times = 3
 	px.z_index = -5
 	var art := Node2D.new()
+	art.position.y = bottom_shift()
 	px.add_child(art)
 	art.draw.connect(fn.bind(art))
 	add_child(px)
@@ -1689,10 +1838,97 @@ func draw_chunk(chunk: Node2D, c0: int, c1: int) -> void:
 					draw_platform(c, r, rng)
 				"B":
 					draw_crate(c, r)
+				"D":
+					draw_cracked(c, r)
+				"c":
+					draw_chest(c, r)
+				"/", "\\":
+					draw_slope(c, r, ch, rng)
 				"^":
 					draw_spikes(c, r, false)
 				"v":
 					draw_spikes(c, r, true)
+
+
+func draw_water() -> void:
+	var tt := Time.get_ticks_msec() * 0.001
+	for cv in water_cells:
+		var x := float(cv.x * TILE)
+		var y := float(cv.y * TILE)
+		var surface := cell(cv.x, cv.y - 1) != "~"
+		var top := y
+		if surface:
+			top = y + 6.0 + sin(tt * 2.5 + x * 0.05) * 2.0
+		water_layer.draw_rect(Rect2(x, top, TILE, y + TILE - top), Color(0.55, 0.62, 0.7, 0.35))
+		if surface:
+			var a := Vector2(x, y + 6.0 + sin(tt * 2.5 + x * 0.05) * 2.0)
+			var b := Vector2(x + TILE, y + 6.0 + sin(tt * 2.5 + (x + TILE) * 0.05) * 2.0)
+			water_layer.draw_line(a, b, Color(1, 1, 1, 0.8), 2.0)
+			water_layer.draw_line(a + Vector2(6, 5), a + Vector2(14, 5), Color(1, 1, 1, 0.25), 1.0)
+		# reflets qui ondulent
+		var sx := x + fmod(tt * 12.0 + cv.y * 13.0, TILE)
+		water_layer.draw_line(Vector2(sx, y + 18), Vector2(minf(sx + 6.0, x + TILE), y + 18), Color(1, 1, 1, 0.12), 1.0)
+
+
+func draw_slope(c: int, r: int, ch: String, rng: RandomNumberGenerator) -> void:
+	var x := float(c * TILE)
+	var y := float(r * TILE)
+	var a := Vector2(x, y + TILE) if ch == "/" else Vector2(x, y)
+	var b := Vector2(x + TILE, y) if ch == "/" else Vector2(x + TILE, y + TILE)
+	var corner := Vector2(x + TILE, y + TILE) if ch == "/" else Vector2(x, y + TILE)
+	var tri := PackedVector2Array([a, b, corner])
+	canvas.draw_colored_polygon(tri, Color.WHITE)
+	canvas.draw_line(a, b, Color(0, 0, 0, 0.35), 1.5)
+	var n := (b - a).normalized()
+	var up := Vector2(n.y, -n.x) if ch == "/" else Vector2(-n.y, n.x)
+	if up.y > 0.0:
+		up = -up
+	match world:
+		0:
+			var k := 0.0
+			while k < 1.0:
+				var p := a.lerp(b, k)
+				var h := rng.randf_range(4.0, 8.0)
+				canvas.draw_colored_polygon(PackedVector2Array([p - n * 1.5 - up * 3.0, p + n * 1.5 - up * 3.0, p + up * h + Vector2(rng.randf_range(-1.5, 1.5), 0)]), Color.BLACK)
+				k += rng.randf_range(0.08, 0.14)
+		3:
+			for i in 4:
+				canvas.draw_circle(a.lerp(b, 0.12 + i * 0.25) - up * 1.0, rng.randf_range(2.5, 4.0), Color(0.08, 0.08, 0.08))
+		4:
+			for i in 4:
+				canvas.draw_circle(a.lerp(b, 0.12 + i * 0.25) - up * 1.0, rng.randf_range(5.0, 6.5), Color.WHITE)
+		_:
+			canvas.draw_line(a - up * 1.5, b - up * 1.5, Color(0.7, 0.7, 0.7), 2.0)
+
+
+# Mur fissuré : se casse à l'arme ou au feu (cache souvent un secret)
+func draw_cracked(c: int, r: int) -> void:
+	var rect := Rect2(c * TILE, r * TILE, TILE, TILE)
+	canvas.draw_rect(rect, Color(0.72, 0.72, 0.72))
+	canvas.draw_rect(rect.grow(-1), Color.BLACK, false, 1.5)
+	canvas.draw_line(rect.position + Vector2(0, 16), rect.position + Vector2(32, 16), Color(0, 0, 0, 0.4), 1.0)
+	canvas.draw_line(rect.position + Vector2(16, 0), rect.position + Vector2(16, 16), Color(0, 0, 0, 0.4), 1.0)
+	var crack := PackedVector2Array([rect.position + Vector2(6, 4), rect.position + Vector2(12, 12), rect.position + Vector2(9, 19), rect.position + Vector2(17, 25), rect.position + Vector2(14, 30)])
+	canvas.draw_polyline(crack, Color.BLACK, 1.5)
+	canvas.draw_line(rect.position + Vector2(12, 12), rect.position + Vector2(22, 9), Color.BLACK, 1.0)
+	canvas.draw_line(rect.position + Vector2(17, 25), rect.position + Vector2(26, 22), Color.BLACK, 1.0)
+
+
+# Coffre au trésor : plein de pièces
+func draw_chest(c: int, r: int) -> void:
+	var x := float(c * TILE)
+	var y := float(r * TILE)
+	var body := Rect2(x + 3, y + 12, 26, 18)
+	canvas.draw_circle(Vector2(x + 16, y + 20), 18.0, Color(1, 0.85, 0.3, 0.08))
+	canvas.draw_rect(body, Color(0.35, 0.35, 0.35))
+	canvas.draw_rect(body, Color.BLACK, false, 1.5)
+	var lid := PackedVector2Array([Vector2(x + 3, y + 12), Vector2(x + 5, y + 6), Vector2(x + 27, y + 6), Vector2(x + 29, y + 12)])
+	canvas.draw_colored_polygon(lid, Color(0.45, 0.45, 0.45))
+	canvas.draw_polyline(PackedVector2Array([lid[0], lid[1], lid[2], lid[3]]), Color.BLACK, 1.5)
+	canvas.draw_line(Vector2(x + 9, y + 6), Vector2(x + 9, y + 30), Color(0.85, 0.85, 0.85), 2.0)
+	canvas.draw_line(Vector2(x + 23, y + 6), Vector2(x + 23, y + 30), Color(0.85, 0.85, 0.85), 2.0)
+	canvas.draw_rect(Rect2(x + 13, y + 10, 6, 7), Color(1.0, 0.8, 0.25))
+	canvas.draw_rect(Rect2(x + 13, y + 10, 6, 7), Color.BLACK, false, 1.0)
 
 
 func tile_hash(c: int, r: int) -> int:
@@ -1702,7 +1938,7 @@ func tile_hash(c: int, r: int) -> int:
 func depth_of(c: int, r: int) -> int:
 	# distance au bord le plus proche (pour assombrir l'intérieur des blocs)
 	for d in range(1, 4):
-		if cell(c, r - d) != "#" or cell(c, r + d) != "#" or cell(c - d, r) != "#" or cell(c + d, r) != "#":
+		if not ground_at(c, r - d) or not ground_at(c, r + d) or not ground_at(c - d, r) or not ground_at(c + d, r):
 			return d
 	return 4
 
@@ -1715,14 +1951,14 @@ func draw_tile(c: int, r: int, rng: RandomNumberGenerator) -> void:
 	var base := Color(shade, shade, shade)
 	canvas.draw_rect(rect, base)
 	var ink := Color(0, 0, 0, 0.55 * shade)
-	var up := cell(c, r - 1) != "#"
-	var down := cell(c, r + 1) != "#"
+	var up := not ground_at(c, r - 1)
+	var down := not ground_at(c, r + 1)
 	# léger dégradé vertical dans chaque case (volume)
 	canvas.draw_rect(Rect2(x, y + 22, TILE, 10), Color(0, 0, 0, 0.08))
-	if cell(c - 1, r) != "#":
+	if not ground_at(c - 1, r):
 		canvas.draw_line(Vector2(x + 1, y), Vector2(x + 1, y + TILE), Color.BLACK, 2.0)
 		canvas.draw_line(Vector2(x + 3, y + 2), Vector2(x + 3, y + TILE), Color(1, 1, 1, 0.5), 1.0)
-	if cell(c + 1, r) != "#":
+	if not ground_at(c + 1, r):
 		canvas.draw_line(Vector2(x + TILE - 1, y), Vector2(x + TILE - 1, y + TILE), Color.BLACK, 2.0)
 		canvas.draw_line(Vector2(x + TILE - 4, y + 2), Vector2(x + TILE - 4, y + TILE), Color(0, 0, 0, 0.15), 2.0)
 	if down and r < rows - 1:

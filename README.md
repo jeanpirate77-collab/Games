@@ -8,7 +8,9 @@ Tout est généré en code : aucun fichier image importé.
 - **5 boss** : le Corbeau, le Golem, le Crapaud géant, le Dragon de brume, le Roi Ombre. Chacun a plusieurs attaques et passe en « colère » à mi-vie.
 - **10 armes**, toujours visibles en main : épée, dague, hache, lance, marteau (onde de choc), faux (frappe tout autour), lame lunaire (lance un croissant), **pistolet**, **fusil à pompe**, **arbalète** (traverse les ennemis). Plus la boule de feu et l'écrasement en sautant dessus.
 - **Ennemis** : marcheur, tireur, chauve-souris, sauteur, spectre, oeil volant, chevalier noir (on ne peut pas lui sauter dessus).
-- **Obstacles** : pics, acide, plateformes fragiles, ressorts, scies, jets de flammes, stalactites qui tombent, pendules, plateformes mobiles, caisses.
+- **Obstacles** : pics, acide, plateformes fragiles, ressorts, scies, jets de flammes, stalactites qui tombent, pendules, boules à pointes tournantes, canons, courants d'air, plateformes mobiles (horizontales et verticales), caisses.
+- **Relief** : niveaux de 18 cases de haut avec collines, pentes, falaises, souterrains, puits, bassins où l'on nage, murs fissurés qui cachent des coffres.
+- **Sons et musique** générés par le code (bouton SON dans le titre et la pause).
 - **À ramasser** : pièces, coeurs, 3 éclats de lune cachés par niveau, caisses cassables.
 - **7 personnages** dessinés en formes lisses (écharpe ou cape qui flotte, yeux qui clignent) : Ombre, Lune, Roc, Ninja (ruée offerte), Sorcière (triple feu), Chevalier (+2 coeurs), Spectre (double saut, plane).
 - **Jusqu'à 16 coeurs** : Armure (5 niveaux), Cristal de vie (3 niveaux), un réceptacle de coeur après chaque boss, bonus de certains personnages.
@@ -28,11 +30,14 @@ Tout est généré en code : aucun fichier image importé.
 | `fireball.gd` | Tous les projectiles |
 | `pickup.gd` | Pièces, coeurs, éclats |
 | `fx.gd` | Particules |
+| `sfx.gd` | Bruitages et musiques fabriqués par le code |
 | `obstacle.gd` | Acide, plateformes fragiles, ressorts, scies, flammes, stalactites, pendules, torches |
 | `canvas_layer.gd` | Boutons tactiles |
 | `menu.gd` | Écran titre, carte des niveaux, magasin |
 | `game_data.gd` | Pièces, achats, sauvegarde, statistiques (pas besoin d'Autoload) |
 | `levels.gd` | Les cartes des niveaux, en texte |
+
+Couleurs : les coeurs sont rouges, les pièces dorées et le feu orange ; le reste du jeu reste en noir et blanc.
 
 Les scripts autres que `main.gd`, `player.gd` et `canvas_layer.gd` ne s'attachent à aucun nœud : `main.gd` les charge.
 

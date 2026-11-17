@@ -9,6 +9,9 @@ extends Node2D
 #   u  "stalactite" : tombe quand le joueur passe dessous
 #   q  "pendule"    : lame qui se balance
 #   T  "torche"     : décor lumineux
+#   O  "boule"      : boule à pointes qui tourne autour d'un axe
+#   n  "canon"      : tire des boulets vers le joueur
+#   V  "vent"       : courant d'air qui fait s'envoler
 
 var kind := "acide"
 var level = null
@@ -42,8 +45,20 @@ func _ready() -> void:
 			add_child(body)
 		"flammes":
 			light = level.add_light(self, 1.4, 0.0)
+			light.color = Color(1, 0.65, 0.35)
 		"torche":
 			light = level.add_light(self, 1.6, 0.9)
+			light.color = Color(1, 0.75, 0.45)
+		"canon":
+			body = StaticBody2D.new()
+			shape = CollisionShape2D.new()
+			var box := RectangleShape2D.new()
+			box.size = Vector2(28, 22)
+			shape.shape = box
+			shape.position = Vector2(0, 5)
+			body.add_child(shape)
+			add_child(body)
+			timer = 1.0 + phase * 0.3
 		"scie":
 			z_index = 1
 
@@ -60,6 +75,11 @@ func _physics_process(delta: float) -> void:
 			light.energy = (1.1 + 0.2 * sin(t * 30.0)) if on else (0.25 if flame_warning() else 0.0)
 			if on and int(t * 30.0) % 2 == 0:
 				level.fx.spawn(position + Vector2(randf_range(-6, 6), 12.0 - randf_range(0, 90)), Vector2(randf_range(-20, 20), -120), Color(1, 1, 1, 0.8), 0.4, 3.0)
+		"canon":
+			update_canon(delta)
+		"vent":
+			if randf() < 0.5:
+				level.fx.streak(position + Vector2(randf_range(-12, 12), 14.0), Vector2(0, -randf_range(200, 320)), Color(1, 1, 1, 0.35), 0.6)
 		"torche":
 			light.energy = 0.85 + 0.15 * sin(t * 11.0) + randf_range(-0.05, 0.05)
 			if randf() < 0.1:
@@ -133,8 +153,40 @@ func update_stalactite(delta: float) -> void:
 				timer = 0.4
 
 
-# Ressorts : appelé par main.gd à chaque image
+var aim := -1.0
+
+
+func update_canon(delta: float) -> void:
+	var dx: float = player.global_position.x - position.x
+	aim = 1.0 if dx > 0.0 else -1.0
+	if absf(dx) > 480.0 or absf(player.global_position.y - position.y) > 200.0:
+		return
+	timer -= delta
+	if timer < 0.4:
+		squash = 1.0 - timer / 0.4  # gonfle avant de tirer
+	if timer <= 0.0:
+		timer = 2.6
+		squash = 0.0
+		level.spawn_projectile(position + Vector2(aim * 20.0, -2.0), Vector2(aim * 180.0, 0), "ennemi", "boulet")
+		level.fx.burst(position + Vector2(aim * 22.0, -2.0), 10, 90.0, Color(0.85, 0.85, 0.85), 0.5, 3.0)
+		level.sound("canon")
+
+
+func ball_pos() -> Vector2:
+	var dir := 1.0 if int(phase * 10.0) % 2 == 0 else -1.0
+	var a := t * 1.7 * dir + phase
+	return position + Vector2(cos(a), sin(a)) * 72.0
+
+
+# Ressorts et courants d'air : appelé par main.gd à chaque image
 func interact(p) -> void:
+	if kind == "vent":
+		var pr0: Rect2 = p.get_hit_rect()
+		if pr0.intersects(Rect2(position.x - 16, position.y + 16 - 200, 32, 200)):
+			var dt := get_physics_process_delta_time()
+			p.velocity.y = maxf(p.velocity.y - 2600.0 * dt, -330.0)
+			p.air_time = 1.0
+		return
 	if kind != "ressort":
 		return
 	var pr: Rect2 = p.get_hit_rect()
@@ -152,6 +204,8 @@ func hits_player(pr: Rect2) -> bool:
 			return pr.intersects(Rect2(position.x - 16, position.y - 6, 32, 22))
 		"scie":
 			return circle_hits(pr, saw_pos(), 13.0)
+		"boule":
+			return circle_hits(pr, ball_pos(), 12.0)
 		"pendule":
 			return circle_hits(pr, pendulum_tip(), 13.0)
 		"flammes":
@@ -199,6 +253,66 @@ func _draw() -> void:
 			draw_pendulum()
 		"torche":
 			draw_torch()
+		"boule":
+			draw_ball()
+		"canon":
+			draw_canon()
+		"vent":
+			draw_vent()
+
+
+func draw_ball() -> void:
+	var b := ball_pos() - position
+	# chaîne de maillons
+	for i in 6:
+		draw_circle(b * (i / 6.0), 2.5, Color(0.5, 0.5, 0.5))
+		draw_arc(b * (i / 6.0), 2.5, 0.0, TAU, 6, Color.BLACK, 1.0)
+	draw_circle(Vector2.ZERO, 6.0, Color(0.3, 0.3, 0.3))
+	draw_circle(Vector2.ZERO, 6.0, Color.BLACK, false, 1.5)
+	# boule à pointes
+	var spikes := PackedVector2Array()
+	for i in 16:
+		var a := t * 4.0 + i * TAU / 16.0
+		spikes.append(b + Vector2(cos(a), sin(a)) * (16.0 if i % 2 == 0 else 10.0))
+	draw_colored_polygon(spikes, Color.WHITE)
+	spikes.append(spikes[0])
+	draw_polyline(spikes, Color.BLACK, 1.5)
+	draw_circle(b, 8.0, Color(0.2, 0.2, 0.2))
+	draw_circle(b + Vector2(-2.5, -2.5), 2.5, Color(1, 1, 1, 0.6))
+
+
+func draw_canon() -> void:
+	var k := squash
+	var f := aim
+	# affût
+	draw_rect(Rect2(-14, 6, 28, 10), Color(0.35, 0.35, 0.35))
+	draw_rect(Rect2(-14, 6, 28, 10), Color.BLACK, false, 1.5)
+	for wx in [-8.0, 8.0]:
+		draw_circle(Vector2(wx, 14), 5.0, Color.BLACK)
+		draw_circle(Vector2(wx, 14), 3.5, Color(0.7, 0.7, 0.7))
+	# tube
+	var tube := PackedVector2Array([Vector2(-f * 10.0, -8.0 - k * 2.0), Vector2(f * 20.0, -6.0 - k), Vector2(f * 20.0, 6.0 + k), Vector2(-f * 10.0, 8.0 + k * 2.0)])
+	draw_colored_polygon(tube, Color(0.15, 0.15, 0.15))
+	tube.append(tube[0])
+	draw_polyline(tube, Color.WHITE, 1.5)
+	draw_circle(Vector2(-f * 10.0, 0), 8.0 + k * 2.0, Color(0.15, 0.15, 0.15))
+	draw_arc(Vector2(-f * 10.0, 0), 8.0 + k * 2.0, 0.0, TAU, 14, Color.WHITE, 1.5)
+	draw_line(Vector2(f * 20.0, -7.0), Vector2(f * 20.0, 7.0), Color.WHITE, 3.0)
+	if k > 0.5:
+		draw_circle(Vector2(f * 24.0, 0), 4.0 * k, Color(1, 0.7, 0.3, 0.6))
+
+
+func draw_vent() -> void:
+	# grille au sol et colonne d'air
+	draw_rect(Rect2(-15, 10, 30, 6), Color(0.3, 0.3, 0.3))
+	for i in 5:
+		draw_line(Vector2(-12 + i * 6, 10), Vector2(-12 + i * 6, 16), Color.BLACK, 1.5)
+	draw_rect(Rect2(-15, 10, 30, 6), Color.BLACK, false, 1.5)
+	for i in 4:
+		var yy := 10.0 - fmod(t * 140.0 + i * 50.0, 200.0)
+		var w := 6.0 + sin(t * 5.0 + i) * 3.0
+		draw_arc(Vector2(sin(t * 3.0 + i) * 4.0, yy), w, PI * 1.1, PI * 1.9, 6, Color(1, 1, 1, 0.3 * (1.0 + yy / 200.0)), 1.5)
+	draw_rect(Rect2(-16, 16 - 200, 32, 200), Color(1, 1, 1, 0.035))
 
 
 func draw_acid() -> void:
@@ -291,10 +405,10 @@ func draw_flames() -> void:
 		for i in range(steps, -1, -1):
 			var k := float(i) / steps
 			pts.append(Vector2(8.0 * (1.0 - k * 0.6) + sin(t * 23.0 + i * 1.3) * 2.0, 6.0 - k * 92.0))
-		draw_colored_polygon(pts, Color(1, 1, 1, 0.9))
-		draw_polyline(pts, Color(0.4, 0.4, 0.4), 1.0)
+		draw_colored_polygon(pts, Color(1, 0.5, 0.12, 0.9))
+		draw_polyline(pts, Color(0.6, 0.2, 0.05), 1.0)
 		var core := PackedVector2Array([Vector2(-3, 6), Vector2(sin(t * 30.0) * 2.0, -60), Vector2(3, 6)])
-		draw_colored_polygon(core, Color(0.6, 0.6, 0.6))
+		draw_colored_polygon(core, Color(1, 0.9, 0.55))
 
 
 func draw_stalactite() -> void:
@@ -341,5 +455,5 @@ func draw_torch() -> void:
 	for k in 3:
 		draw_circle(Vector2(0, -16), (7.0 + k * 5.0) * flick, Color(1, 1, 1, 0.06))
 	var flame := PackedVector2Array([Vector2(-4, -10), Vector2(sin(t * 13.0) * 2.0, -24.0 * flick), Vector2(4, -10)])
-	draw_colored_polygon(flame, Color.WHITE)
-	draw_circle(Vector2(0, -12), 3.0, Color(0.7, 0.7, 0.7))
+	draw_colored_polygon(flame, Color(1, 0.55, 0.15))
+	draw_circle(Vector2(0, -12), 3.0, Color(1, 0.92, 0.6))

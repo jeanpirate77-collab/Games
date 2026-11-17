@@ -76,6 +76,8 @@ static var screen := "titre"      # "titre", "carte", "magasin" ou "niveau"
 static var current_level := 0
 static var taps := {}             # appuis récents (pour ne jamais rater un tap)
 static var loaded := false
+static var sfx_on := true
+static var music_on := true
 
 
 # ---------- Sauvegarde ----------
@@ -90,6 +92,8 @@ static func save_game() -> void:
 	cfg.set_value("jeu", "shards", shards)
 	cfg.set_value("jeu", "containers", containers)
 	cfg.set_value("jeu", "version", 2)
+	cfg.set_value("options", "sons", sfx_on)
+	cfg.set_value("options", "musique", music_on)
 	cfg.save(SAVE_PATH)
 
 
@@ -107,6 +111,8 @@ static func load_game() -> void:
 	unlocked = cfg.get_value("jeu", "unlocked", 0)
 	shards = cfg.get_value("jeu", "shards", {})
 	containers = cfg.get_value("jeu", "containers", {})
+	sfx_on = cfg.get_value("options", "sons", true)
+	music_on = cfg.get_value("options", "musique", true)
 	if int(cfg.get_value("jeu", "version", 1)) < 2:
 		migrate_v1()
 	if not WEAPONS.has(weapon):
