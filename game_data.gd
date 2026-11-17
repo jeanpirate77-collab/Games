@@ -9,6 +9,7 @@ const SAVE_PATH := "user://sauvegarde.cfg"
 
 # Armes : dégâts, durée du coup (s), zone touchée (largeur, hauteur), style d'animation
 #   "arc" : coup de haut en bas   "pique" : coup droit devant   "tour" : tour complet
+#   "tir" : arme à feu -> projectile "proj", vitesse, nombre de projectiles, écart entre eux
 const WEAPONS := {
 	"epee": {"degats": 1, "duree": 0.28, "zone": Vector2(40, 38), "style": "arc"},
 	"dague": {"degats": 1, "duree": 0.16, "zone": Vector2(30, 30), "style": "arc"},
@@ -17,6 +18,9 @@ const WEAPONS := {
 	"marteau": {"degats": 3, "duree": 0.6, "zone": Vector2(44, 52), "style": "arc"},
 	"faux": {"degats": 2, "duree": 0.5, "zone": Vector2(96, 54), "style": "tour"},
 	"lame": {"degats": 2, "duree": 0.3, "zone": Vector2(44, 40), "style": "arc"},
+	"pistolet": {"degats": 2, "duree": 0.32, "zone": Vector2.ZERO, "style": "tir", "proj": "balle", "vitesse": 560.0, "nombre": 1, "ecart": 0.0},
+	"fusil": {"degats": 1, "duree": 0.75, "zone": Vector2.ZERO, "style": "tir", "proj": "plomb", "vitesse": 460.0, "nombre": 5, "ecart": 0.11},
+	"arbalete": {"degats": 3, "duree": 0.7, "zone": Vector2.ZERO, "style": "tir", "proj": "carreau", "vitesse": 600.0, "nombre": 1, "ecart": 0.0},
 }
 
 # Personnages : bonus de coeurs, vitesse, saut, recharge du feu, dégâts, pouvoirs offerts
@@ -44,6 +48,9 @@ const ITEMS := [
 	{"id": "marteau", "cat": "ARMES", "nom": "Marteau", "desc": "Dégâts 3 + onde de choc au sol", "prix": [190], "type": "arme"},
 	{"id": "faux", "cat": "ARMES", "nom": "Faux", "desc": "Tourne et frappe des deux côtés. Dégâts 2", "prix": [230], "type": "arme"},
 	{"id": "lame", "cat": "ARMES", "nom": "Lame lunaire", "desc": "Dégâts 2 + lance un croissant de lune", "prix": [350], "type": "arme"},
+	{"id": "pistolet", "cat": "ARMES", "nom": "Pistolet", "desc": "Tire des balles rapides. Dégâts 2", "prix": [240], "type": "arme"},
+	{"id": "fusil", "cat": "ARMES", "nom": "Fusil à pompe", "desc": "5 plombs en éventail, courte portée", "prix": [300], "type": "arme"},
+	{"id": "arbalete", "cat": "ARMES", "nom": "Arbalète", "desc": "Carreau qui traverse les ennemis. Dégâts 3", "prix": [380], "type": "arme"},
 	{"id": "forge", "cat": "ARMES", "nom": "Forge", "desc": "+1 dégât pour toutes les armes", "prix": [90, 180, 300], "type": "niveau"},
 	{"id": "feu", "cat": "POUVOIRS", "nom": "Boule de feu", "desc": "Niv 2 : recharge rapide. Niv 3 : triple tir", "prix": [0, 90, 200], "type": "niveau"},
 	{"id": "double_saut", "cat": "POUVOIRS", "nom": "Double saut", "desc": "Sauter une 2e fois en l'air", "prix": [150], "type": "niveau"},
@@ -82,6 +89,7 @@ static func save_game() -> void:
 	cfg.set_value("jeu", "unlocked", unlocked)
 	cfg.set_value("jeu", "shards", shards)
 	cfg.set_value("jeu", "containers", containers)
+	cfg.set_value("jeu", "version", 2)
 	cfg.save(SAVE_PATH)
 
 
@@ -99,10 +107,33 @@ static func load_game() -> void:
 	unlocked = cfg.get_value("jeu", "unlocked", 0)
 	shards = cfg.get_value("jeu", "shards", {})
 	containers = cfg.get_value("jeu", "containers", {})
+	if int(cfg.get_value("jeu", "version", 1)) < 2:
+		migrate_v1()
 	if not WEAPONS.has(weapon):
 		weapon = "epee"
 	if not CHARACTERS.has(character):
 		character = "ombre"
+
+
+# Ancienne sauvegarde (3 mondes de 3 niveaux) -> nouvelle (5 mondes de 4 niveaux,
+# le Château devient le dernier monde)
+static func old_to_new(i: int) -> int:
+	var w := floori(i / 3.0)
+	var k := i % 3
+	var slot: int = [0, 1, 4][clampi(w, 0, 2)]
+	return slot * 4 + (3 if k == 2 else k)
+
+
+static func migrate_v1() -> void:
+	unlocked = old_to_new(unlocked)
+	var s2 := {}
+	for k in shards:
+		s2[old_to_new(int(k))] = shards[k]
+	shards = s2
+	var c2 := {}
+	for k in containers:
+		c2[old_to_new(int(k))] = true
+	containers = c2
 
 
 static func total_shards() -> int:

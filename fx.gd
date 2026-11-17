@@ -25,6 +25,13 @@ func burst(pos: Vector2, count: int, spread: float, color: Color, life := 0.5, s
 		spawn(pos, v, color, life * randf_range(0.6, 1.0), size * randf_range(0.7, 1.3), gravity)
 
 
+# trait qui file (vent, vitesse)
+func streak(pos: Vector2, vel: Vector2, color: Color, life: float) -> void:
+	if parts.size() >= MAX_PARTS:
+		return
+	parts.append({"p": pos, "v": vel, "life": life, "max": life, "size": 1.0, "c": color, "g": 0.0, "ring": false, "streak": true})
+
+
 func ring(pos: Vector2, radius: float, color: Color, life := 0.4) -> void:
 	parts.append({"p": pos, "v": Vector2.ZERO, "life": life, "max": life, "size": radius, "c": color, "g": 0.0, "ring": true})
 
@@ -52,7 +59,9 @@ func _draw() -> void:
 		c.a *= k
 		var p: Vector2 = q["p"]
 		var s: float = q["size"]
-		if q["ring"]:
+		if q.get("streak", false):
+			draw_line(p, p - Vector2(q["v"]) * 0.06, c, 1.0)
+		elif q["ring"]:
 			draw_arc(p, s * (1.0 + (1.0 - k) * 2.0), 0.0, TAU, 24, c, 2.0)
 		else:
 			draw_rect(Rect2(p - Vector2(s, s) * 0.5, Vector2(s, s)), c)

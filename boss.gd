@@ -4,6 +4,8 @@ extends Node2D
 #   "corbeau" : vole, lâche des plumes, pique vers le sol (vulnérable une fois posé)
 #   "golem"   : marche, lance des rochers, saute et crée des ondes de choc
 #   "roi"     : se téléporte, tire en éventail, invoque des chauves-souris, pluie d'ombres
+#   "crapaud" : bondit, coup de langue, crache du poison
+#   "dragon"  : serpent volant, souffle de feu, pique sur le joueur (seule la tête est vulnérable)
 
 var kind := "corbeau"
 var level = null
@@ -29,6 +31,8 @@ var arena_left := 64.0
 var arena_right := 768.0
 var ground_y := 320.0
 var half := Vector2(30, 20)
+var tongue := 0.0         # longueur de la langue du crapaud
+var hist: Array = []      # positions passées de la tête du dragon (pour le corps)
 
 
 func _ready() -> void:
@@ -39,6 +43,16 @@ func _ready() -> void:
 			max_hp = 20
 			half = Vector2(28, 34)
 			position.y = ground_y + 50.0
+		"crapaud":
+			display_name = "LE CRAPAUD GÉANT"
+			max_hp = 24
+			half = Vector2(32, 20)
+			position.y = -80.0
+		"dragon":
+			display_name = "LE DRAGON DE BRUME"
+			max_hp = 30
+			half = Vector2(18, 13)
+			position = Vector2(arena_right + 120.0, 90.0)
 		"roi":
 			display_name = "LE ROI OMBRE"
 			max_hp = 26
@@ -52,6 +66,23 @@ func _ready() -> void:
 			position.y = -60.0
 	hp = max_hp
 	z_index = 2
+
+
+# Zones dangereuses en plus du corps (langue du crapaud, corps du dragon)
+func get_extra_rects() -> Array:
+	var out := []
+	if dead or state == "intro":
+		return out
+	if kind == "crapaud" and tongue > 4.0:
+		var mouth := position + Vector2(facing * 24.0, 2.0)
+		var x0 := mouth.x if facing > 0.0 else mouth.x - tongue
+		out.append(Rect2(x0, mouth.y - 5.0, tongue, 10.0))
+	elif kind == "dragon":
+		for i in range(1, 10):
+			var p := segment_pos(i)
+			var r := 11.0 - i * 0.5
+			out.append(Rect2(p - Vector2(r, r), Vector2(r, r) * 2.0))
+	return out
 
 
 func get_hit_rect() -> Rect2:
@@ -98,6 +129,10 @@ func _physics_process(delta: float) -> void:
 				update_golem(delta)
 			"roi":
 				update_roi(delta)
+			"crapaud":
+				update_crapaud(delta)
+			"dragon":
+				update_dragon(delta)
 			_:
 				update_corbeau(delta)
 	modulate.a = alpha
@@ -241,6 +276,148 @@ func update_golem(delta: float) -> void:
 				timer = 2.0
 
 
+# ---------- Le Crapaud géant ----------
+
+func update_crapaud(delta: float) -> void:
+	var p: Vector2 = target.global_position
+	var feet_y := ground_y - half.y
+	shake = Vector2.ZERO
+	match state:
+		"intro":
+			vel.y += 900.0 * delta
+			position.y += vel.y * delta
+			if position.y >= feet_y:
+				position.y = feet_y
+				vel = Vector2.ZERO
+				land_splash()
+				state = "attend"
+				timer = 1.0
+		"attend":
+			facing = 1.0 if p.x > position.x else -1.0
+			timer -= delta
+			if timer <= 0.0:
+				var cycle := ["saut", "langue", "crache", "saut", "langue"]
+				state = cycle[attack_index % cycle.size()]
+				attack_index += 1
+				timer = 0.4
+				match state:
+					"saut":
+						vel = Vector2(clampf((p.x - position.x) / 0.8, -300.0, 300.0), -520.0)
+					"crache":
+						shots_left = 5 if phase2 else 3
+						shot_timer = 0.3
+		"saut":
+			vel.y += 1200.0 * delta
+			position += vel * delta
+			position.x = clampf(position.x, arena_left + half.x, arena_right - half.x)
+			if vel.y > 0.0 and position.y >= feet_y:
+				position.y = feet_y
+				vel = Vector2.ZERO
+				land_splash()
+				state = "attend"
+				timer = 0.6 if phase2 else 1.0
+		"langue":
+			timer -= delta
+			var max_len := 220.0 if phase2 else 180.0
+			if timer > 0.0:
+				shake = Vector2(randf_range(-1.5, 1.5), 0)  # prévient avant de tirer la langue
+			elif timer > -0.25:
+				tongue = move_toward(tongue, max_len, max_len * 4.0 * delta)
+			elif timer > -0.4:
+				pass
+			else:
+				tongue = move_toward(tongue, 0.0, max_len * 3.0 * delta)
+				if tongue <= 0.0:
+					state = "attend"
+					timer = 0.7
+		"crache":
+			facing = 1.0 if p.x > position.x else -1.0
+			shot_timer -= delta
+			if shot_timer <= 0.0:
+				shot_timer = 0.35
+				shots_left -= 1
+				var from_pos := position + Vector2(facing * 24.0, -4.0)
+				var tt := 0.8 + randf_range(-0.15, 0.15)
+				var aim := p + Vector2(randf_range(-50, 50), 0)
+				var v := Vector2((aim.x - from_pos.x) / tt, (aim.y - from_pos.y - 0.5 * 500.0 * tt * tt) / tt)
+				level.spawn_projectile(from_pos, v, "ennemi", "poison")
+				if shots_left <= 0:
+					state = "attend"
+					timer = 0.8
+
+
+func land_splash() -> void:
+	level.shake(8.0)
+	level.fx.burst(Vector2(position.x, ground_y), 18, 150.0, Color(0.85, 0.85, 0.85), 0.6, 3.0, 300.0, 80.0)
+	for d in [-1.0, 1.0]:
+		level.spawn_projectile(position + Vector2(d * 20.0, -10.0), Vector2(d * 120.0, -280.0), "ennemi", "poison")
+		if phase2:
+			level.spawn_projectile(position + Vector2(d * 20.0, -10.0), Vector2(d * 220.0, -220.0), "ennemi", "poison")
+
+
+# ---------- Le Dragon de brume ----------
+
+func segment_pos(i: int) -> Vector2:
+	if hist.is_empty():
+		return position
+	var idx := maxi(0, hist.size() - 1 - i * 4)
+	return hist[idx]
+
+
+func update_dragon(delta: float) -> void:
+	var p: Vector2 = target.global_position
+	var cx := (arena_left + arena_right) * 0.5
+	var w := (arena_right - arena_left) * 0.38
+	var goal := Vector2(cx + sin(t * 0.8) * w, 120.0 + sin(t * 1.6) * 45.0)
+	match state:
+		"intro":
+			position = position.move_toward(goal, 160.0 * delta)
+			if position.distance_to(goal) < 10.0:
+				state = "vol"
+				timer = 2.5
+		"vol":
+			position = position.move_toward(goal, (220.0 if phase2 else 170.0) * delta)
+			timer -= delta
+			if timer <= 0.0:
+				attack_index += 1
+				if attack_index % 2 == 1:
+					state = "souffle"
+					timer = 0.7
+					shots_left = 1
+				else:
+					state = "pique"
+					dive_goal = p
+		"souffle":
+			timer -= delta
+			shake = Vector2(randf_range(-1, 1), randf_range(-1, 1))
+			if timer < 0.35 and shots_left > 0:
+				shots_left = 0
+				var count := 5 if phase2 else 3
+				var base := (p - position).angle()
+				for i in count:
+					var a := base + (i - (count - 1) * 0.5) * 0.25
+					level.spawn_projectile(position + Vector2(cos(base), sin(base)) * 16.0, Vector2(cos(a), sin(a)) * 190.0, "ennemi", "flamme")
+				level.shake(3.0)
+			if timer <= 0.0:
+				state = "vol"
+				timer = 1.6 if phase2 else 2.4
+		"pique":
+			position = position.move_toward(dive_goal, 340.0 * delta)
+			if position.distance_to(dive_goal) < 6.0 or position.y > ground_y - 30.0:
+				state = "vol"
+				timer = 1.8 if phase2 else 2.6
+				level.fx.burst(position, 14, 120.0, Color(0.85, 0.85, 0.85), 0.5, 3.0)
+	shake = Vector2.ZERO if state != "souffle" else shake
+	# mémorise le chemin de la tête : le corps le suit
+	if hist.is_empty() or position.distance_to(hist[hist.size() - 1]) > 3.0:
+		hist.append(position)
+		if hist.size() > 60:
+			hist.remove_at(0)
+	var look_dir := position - segment_pos(1)
+	if absf(look_dir.x) > 0.5:
+		facing = signf(look_dir.x)
+
+
 # ---------- Le Roi Ombre ----------
 
 func update_roi(delta: float) -> void:
@@ -335,6 +512,10 @@ func _draw() -> void:
 			draw_golem()
 		"roi":
 			draw_roi()
+		"crapaud":
+			draw_crapaud()
+		"dragon":
+			draw_dragon()
 		_:
 			draw_corbeau()
 	draw_set_transform(Vector2.ZERO)
@@ -451,6 +632,104 @@ func draw_golem() -> void:
 		draw_line(shoulder, hand, m, 10.0)
 		draw_circle(hand, 8.0, l)
 		draw_circle(hand, 6.5, m)
+
+
+func draw_crapaud() -> void:
+	var m := main_color()
+	var l := line_color()
+	var f := facing
+	var crouch := 4.0 if state == "attend" and timer < 0.3 else 0.0
+	var air := state == "saut" or state == "intro"
+	# pattes arrière
+	for side in [-1.0, 1.0]:
+		var leg := Vector2(side * 22.0, 12.0 + crouch)
+		if air:
+			leg += Vector2(side * 8.0, 8.0)
+		fill_ellipse(leg, 12.0, 9.0, l)
+		fill_ellipse(leg, 10.5, 7.5, m)
+	# corps
+	fill_ellipse(Vector2(0, crouch), 34.0, 21.0 - crouch * 0.5, l)
+	fill_ellipse(Vector2(0, crouch), 32.0, 19.5 - crouch * 0.5, m)
+	# ventre clair
+	fill_ellipse(Vector2(f * 8.0, 9.0 + crouch), 20.0, 9.0, Color(0.85, 0.85, 0.85) if flash <= 0.0 else Color.BLACK)
+	# taches sur le dos
+	for i in 5:
+		draw_circle(Vector2(-f * (6.0 + i * 5.0) + sin(i * 2.3) * 4.0, -10.0 + cos(i * 1.7) * 4.0 + crouch), 2.5, Color(1, 1, 1, 0.25))
+	# yeux globuleux qui suivent le joueur
+	var to_p: Vector2 = (target.global_position - position).normalized() if target else Vector2.ZERO
+	for k in [0.0, 1.0]:
+		var e := Vector2(f * (6.0 + k * 14.0), -20.0 + crouch)
+		draw_circle(e, 8.5, l)
+		draw_circle(e, 7.0, Color.WHITE if flash <= 0.0 else Color.BLACK)
+		draw_circle(e + to_p * 2.5, 3.5 if not phase2 else 4.5, Color.BLACK if flash <= 0.0 else Color.WHITE)
+		draw_circle(e + to_p * 2.5 + Vector2(-1, -1), 1.0, Color.WHITE)
+	# bouche
+	var mouth := Vector2(f * 24.0, 2.0 + crouch)
+	if tongue > 0.0:
+		draw_colored_polygon(PackedVector2Array([Vector2(f * 6.0, 0.0 + crouch), mouth + Vector2(f * 4.0, -6.0), mouth + Vector2(f * 4.0, 6.0)]), Color.BLACK)
+		var tip := mouth + Vector2(f * tongue, 0)
+		draw_line(mouth, tip, Color.BLACK, 8.0)
+		draw_line(mouth, tip, Color(0.9, 0.9, 0.9), 5.0)
+		draw_circle(tip, 7.0, Color.BLACK)
+		draw_circle(tip, 5.5, Color.WHITE)
+	else:
+		var smile := PackedVector2Array()
+		for i in 7:
+			var k := i / 6.0
+			smile.append(Vector2(f * (2.0 + k * 26.0), 2.0 + crouch + sin(k * PI) * 3.0))
+		draw_polyline(smile, l, 2.0)
+	# pattes avant
+	for side in [0.0, 1.0]:
+		var hand := Vector2(f * (14.0 + side * 10.0), 20.0)
+		draw_line(Vector2(f * (10.0 + side * 8.0), 8.0 + crouch), hand, l, 6.0)
+		draw_line(Vector2(f * (10.0 + side * 8.0), 8.0 + crouch), hand, m, 3.5)
+
+
+func draw_dragon() -> void:
+	var m := main_color()
+	var l := line_color()
+	# corps : de la queue vers la tête
+	for i in range(9, 0, -1):
+		var p := segment_pos(i) - position
+		var r := 11.0 - i * 0.6
+		var nxt := segment_pos(i - 1) - position
+		var dir := (nxt - p).normalized()
+		var n := Vector2(-dir.y, dir.x)
+		# piquants sur le dos
+		draw_colored_polygon(PackedVector2Array([p + n * (r - 2.0) - dir * 3.0, p - n * 0.0 + n * (r + 7.0), p + n * (r - 2.0) + dir * 3.0]), Color.WHITE)
+		draw_circle(p, r + 1.5, l)
+		draw_circle(p, r, m)
+		draw_arc(p, r - 3.0, n.angle() - 0.8, n.angle() + 0.8, 6, Color(1, 1, 1, 0.3), 1.5)
+		if i == 9:
+			# nageoire de queue
+			draw_colored_polygon(PackedVector2Array([p - dir * 4.0, p - dir * 18.0 + n * 9.0, p - dir * 12.0, p - dir * 18.0 - n * 9.0]), Color.WHITE)
+	# tête
+	var f := facing
+	var head := PackedVector2Array([Vector2(-f * 14.0, -10.0), Vector2(f * 6.0, -12.0), Vector2(f * 22.0, -4.0), Vector2(f * 24.0, 2.0), Vector2(f * 8.0, 4.0), Vector2(-f * 12.0, 8.0)])
+	draw_colored_polygon(head, m)
+	outline(head)
+	# mâchoire (ouverte pendant le souffle)
+	var open := 8.0 if state == "souffle" else 2.0
+	var jaw := PackedVector2Array([Vector2(-f * 8.0, 6.0), Vector2(f * 8.0, 4.0), Vector2(f * 20.0, 4.0 + open), Vector2(-f * 4.0, 12.0)])
+	draw_colored_polygon(jaw, m)
+	outline(jaw)
+	if state == "souffle":
+		draw_circle(Vector2(f * 20.0, 4.0), 7.0, Color(1, 1, 1, 0.6))
+	# cornes et oeil
+	for k in [0.0, 1.0]:
+		var base := Vector2(-f * (6.0 + k * 6.0), -10.0)
+		draw_colored_polygon(PackedVector2Array([base, base + Vector2(-f * 16.0, -10.0 + k * 4.0), base + Vector2(-f * 4.0, 2.0)]), Color.WHITE)
+	var eye := Vector2(f * 6.0, -5.0)
+	draw_circle(eye, 6.0, Color(1, 1, 1, 0.2))
+	draw_circle(eye, 3.5, Color.WHITE)
+	draw_line(eye + Vector2(0, -2.5), eye + Vector2(0, 2.5), Color.BLACK, 1.5)
+	# moustaches
+	for k in [0.0, 1.0]:
+		var wh := PackedVector2Array()
+		for i in 6:
+			var q := i / 5.0
+			wh.append(Vector2(f * (18.0 - q * 26.0), 2.0 + k * 3.0 + q * 10.0 + sin(t * 4.0 + q * 3.0 + k) * 3.0))
+		draw_polyline(wh, Color(0.85, 0.85, 0.85), 1.2)
 
 
 func draw_roi() -> void:

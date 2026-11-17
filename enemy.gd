@@ -8,6 +8,8 @@ const GameData = preload("res://game_data.gd")
 #   "chauve-souris" : vole sur place puis fonce sur le joueur
 #   "sauteur"       : bondit vers le joueur
 #   "spectre"       : flotte à travers les murs vers le joueur
+#   "oeil"          : vole et tire des boules visées sur le joueur
+#   "chevalier"     : cuirassé (4 coups), casque à pointe (on ne peut pas sauter dessus), charge
 
 var kind := "marcheur"
 var level = null
@@ -214,6 +216,79 @@ const GHOST_B := [
 	"................",
 ]
 
+const EYE_A := [
+	"................",
+	".....wwwwww.....",
+	"...ww######ww...",
+	"..w##wwwwww##w..",
+	".w##wwwwwwww##w.",
+	".w#wwww##wwww#w.",
+	"w##www####www##w",
+	"w##www####www##w",
+	".w#wwww##wwww#w.",
+	".w##wwwwwwww##w.",
+	"..w##wwwwww##w..",
+	"...ww######ww...",
+	".....w#ww#w.....",
+	"......w..w......",
+	".....w....w.....",
+	"................",
+]
+const EYE_B := [
+	"................",
+	".....wwwwww.....",
+	"...ww######ww...",
+	"..w##wwwwww##w..",
+	".w##wwwwwwww##w.",
+	".w#ww##wwwwww#w.",
+	"w##w####wwwww##w",
+	"w##w####wwwww##w",
+	".w#ww##wwwwww#w.",
+	".w##wwwwwwww##w.",
+	"..w##wwwwww##w..",
+	"...ww######ww...",
+	".....w#ww#w.....",
+	".....w....w.....",
+	"......w..w......",
+	"................",
+]
+const KNIGHT_A := [
+	".......ww.......",
+	"......w##w......",
+	".....w####w.....",
+	"....w######w....",
+	"....w#ww#ww#w...",
+	"....w######w....",
+	"..www######w....",
+	".w#ggw#####ww...",
+	".w#ggw######ww..",
+	".w#ggw#######w..",
+	".w#ggw######w...",
+	"..wwww######w...",
+	"....w###w###w...",
+	"....w##w.w##w...",
+	"....w##w.w##w...",
+	"...ww##w.w##ww..",
+]
+const KNIGHT_B := [
+	".......ww.......",
+	"......w##w......",
+	".....w####w.....",
+	"....w######w....",
+	"....w#ww#ww#w...",
+	"....w######w....",
+	"..www######w....",
+	".w#ggw#####ww...",
+	".w#ggw######ww..",
+	".w#ggw#######w..",
+	".w#ggw######w...",
+	"..wwww######w...",
+	"....w###ww##w...",
+	"...w##w..w##w...",
+	"..w##w....w##w..",
+	"..www......www..",
+]
+
 
 func _ready() -> void:
 	add_to_group("ennemis")
@@ -245,6 +320,20 @@ func _ready() -> void:
 			timer = 1.0
 			rect_offset = Vector2(-13, -2)
 			rect_size = Vector2(26, 18)
+		"oeil":
+			art = [EYE_A, EYE_B]
+			hp = 2
+			coins = 3
+			timer = 1.5
+			rect_offset = Vector2(-13, -12)
+			rect_size = Vector2(26, 22)
+		"chevalier":
+			art = [KNIGHT_A, KNIGHT_B]
+			hp = 4
+			coins = 6
+			stompable = false
+			rect_offset = Vector2(-11, -14)
+			rect_size = Vector2(22, 30)
 		"spectre":
 			art = [GHOST_A, GHOST_B]
 			hp = 2
@@ -278,6 +367,10 @@ func _physics_process(delta: float) -> void:
 			update_jumper(delta)
 		"spectre":
 			update_ghost(delta)
+		"oeil":
+			update_eye(delta)
+		"chevalier":
+			update_knight(delta)
 		_:
 			update_walker(delta)
 	sprite.texture = frames_flash[pose] if flash > 0.0 else frames[pose]
@@ -286,7 +379,7 @@ func _physics_process(delta: float) -> void:
 
 func _draw() -> void:
 	# ombre au sol
-	if dead or kind == "chauve-souris" or kind == "spectre" or not on_ground:
+	if dead or kind == "chauve-souris" or kind == "spectre" or kind == "oeil" or not on_ground:
 		return
 	draw_set_transform(Vector2(0, 16), 0.0, Vector2(1.0, 0.3))
 	draw_circle(Vector2.ZERO, 12.0, Color(0, 0, 0, 0.45))
@@ -376,6 +469,34 @@ func update_jumper(delta: float) -> void:
 		if position.y > level.world_bottom() + 80.0:
 			queue_free()
 	sprite.flip_h = dir_x > 0.0
+
+
+func update_eye(delta: float) -> void:
+	var to_player: Vector2 = target.global_position - global_position
+	var hover := home + Vector2(sin(anim_time * 0.9) * 40.0, sin(anim_time * 2.2) * 10.0)
+	position = position.move_toward(hover, 50.0 * delta)
+	pose = 1 if to_player.x > 0.0 else 0
+	sprite.flip_h = false
+	timer -= delta
+	if timer <= 0.0 and to_player.length() < 320.0:
+		timer = 2.2
+		level.spawn_projectile(position + to_player.normalized() * 14.0, to_player.normalized() * 160.0, "ennemi", "boule")
+		sprite.scale = Vector2(2.5, 2.5)
+	sprite.scale = sprite.scale.lerp(Vector2(2, 2), 8.0 * delta)
+
+
+func update_knight(delta: float) -> void:
+	var to_player: Vector2 = target.global_position - global_position
+	var sees := absf(to_player.y) < 40.0 and absf(to_player.x) < 190.0 and signf(to_player.x) == dir_x
+	var spd := 115.0 if sees else 40.0
+	position.x += dir_x * spd * delta
+	var ahead := position + Vector2(dir_x * 14.0, 0)
+	if level.is_solid(ahead) or not level.is_solid(ahead + Vector2(0, 22), true):
+		dir_x = -dir_x
+	sprite.flip_h = dir_x > 0.0
+	pose = int(anim_time * (10.0 if sees else 5.0)) % 2
+	if sees and int(anim_time * 10.0) % 3 == 0:
+		level.fx.spawn(position + Vector2(-dir_x * 8.0, 15.0), Vector2(-dir_x * 30.0, -20.0), Color(0.8, 0.8, 0.8, 0.7), 0.3, 2.0)
 
 
 func update_ghost(delta: float) -> void:

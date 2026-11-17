@@ -6,7 +6,7 @@ const PlayerScript = preload("res://player.gd")
 
 # Écrans de menu construits en code : titre, carte des niveaux, magasin.
 
-const WORLD_NAMES := ["LA FORÊT MORTE", "LA GROTTE", "LE CHÂTEAU"]
+const WORLD_NAMES := ["LA FORÊT MORTE", "LA GROTTE", "LES MARAIS", "LES NUAGES", "LE CHÂTEAU"]
 const TABS := ["COEURS", "ARMES", "POUVOIRS", "PERSOS"]
 
 var root: Control
@@ -102,24 +102,31 @@ func item_name(id: String) -> String:
 	return id
 
 
-# Personnage (et arme) dessinés en grand, avec un halo
-func make_hero_preview(char_id: String, weapon_id: String, scale_k: float) -> Control:
-	var tex: Texture2D = PlayerScript.build_frames(char_id)["idle"]
+# Personnage (et arme) dessinés en grand, animés, avec un halo
+func make_hero_preview(char_id: String, weapon_id: String, sk: float) -> Control:
 	var ctrl := Control.new()
-	ctrl.custom_minimum_size = Vector2(16, 18) * scale_k * 1.6
+	ctrl.custom_minimum_size = Vector2(40, 48) * sk
 	ctrl.draw.connect(func():
+		var t := Time.get_ticks_msec() * 0.001
 		var c := ctrl.size * 0.5
 		for k in 3:
-			ctrl.draw_circle(c, (10.0 + k * 6.0) * scale_k, Color(1, 1, 1, 0.05))
-		if weapon_id != "":
-			ctrl.draw_set_transform(c, 0.0, Vector2(scale_k * 0.5, scale_k * 0.5))
-			var rest := Vector2(cos(deg_to_rad(-65.0)), sin(deg_to_rad(-65.0)))
-			PlayerScript.draw_weapon_shape(ctrl, Vector2(-4, 6) * 2.0, rest, weapon_id, 0.0)
-			ctrl.draw_set_transform(Vector2.ZERO)
-		var sz := Vector2(16, 16) * scale_k
-		ctrl.draw_texture_rect(tex, Rect2(c - sz * 0.5, sz), false)
+			ctrl.draw_circle(c, (12.0 + k * 5.0) * sk, Color(1, 1, 1, 0.05))
+		var xf := Transform2D(0.0, Vector2(sk, sk), 0.0, c + Vector2(0, 5.0 * sk))
+		var gun := PlayerScript.is_gun(weapon_id)
+		var st := {"t": t, "pose": "idle", "facing": 1.0}
+		if weapon_id != "" and not gun:
+			st["hand_b"] = Vector2(-4, 6)
+			ctrl.draw_set_transform_matrix(xf)
+			PlayerScript.draw_weapon_shape(ctrl, Vector2(-4, 6), Vector2(cos(deg_to_rad(-65.0)), sin(deg_to_rad(-65.0))), weapon_id, t)
+		if gun:
+			st["hand_f"] = Vector2(8, 3)
+		PlayerScript.draw_character(ctrl, char_id, st, xf)
+		if gun:
+			ctrl.draw_set_transform_matrix(xf)
+			PlayerScript.draw_weapon_shape(ctrl, Vector2(8, 3), Vector2(0.9, 0.45).normalized(), weapon_id, t)
+		ctrl.draw_set_transform(Vector2.ZERO)
 	)
-	ctrl.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	get_tree().process_frame.connect(ctrl.queue_redraw)
 	return ctrl
 
 
@@ -138,7 +145,11 @@ func make_weapon_icon(weapon_id: String) -> Control:
 func go_to_level(index: int) -> void:
 	GameData.current_level = index
 	GameData.screen = "niveau"
-	get_tree().reload_current_scene()
+	var main_node = get_tree().current_scene
+	if main_node.has_method("fade_and_reload"):
+		main_node.fade_and_reload()
+	else:
+		get_tree().reload_current_scene()
 
 
 # ---------- Titre ----------
@@ -164,7 +175,7 @@ func show_title() -> void:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(sub)
 
-	box.add_child(make_hero_preview(GameData.character, GameData.weapon, 2.6))
+	box.add_child(make_hero_preview(GameData.character, GameData.weapon, 1.5))
 	var equip_text := "%s  +  %s     COEURS : %d" % [item_name(GameData.character), item_name(GameData.weapon), GameData.max_hearts()]
 	var eq := make_label(equip_text, 14, Color(0.8, 0.8, 0.8))
 	eq.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -191,10 +202,10 @@ func show_map() -> void:
 	GameData.screen = "carte"
 	var cc := full_center()
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
+	box.add_theme_constant_override("separation", 5)
 	cc.add_child(box)
 
-	var head := make_label("CHOISIS UN NIVEAU", 28)
+	var head := make_label("CHOISIS UN NIVEAU", 24)
 	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(head)
 	var info := make_label(coins_text(), 15, Color(0.8, 0.8, 0.8))
@@ -202,16 +213,16 @@ func show_map() -> void:
 	box.add_child(info)
 
 	var levels: Array = Levels.LEVELS
-	for w in 3:
+	for w in WORLD_NAMES.size():
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
+		row.add_theme_constant_override("separation", 6)
 		box.add_child(row)
 		var wl := make_label(WORLD_NAMES[w], 15)
-		wl.custom_minimum_size = Vector2(150, 0)
+		wl.custom_minimum_size = Vector2(130, 0)
 		wl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		row.add_child(wl)
-		for k in 3:
-			var index := w * 3 + k
+		for k in 4:
+			var index := w * 4 + k
 			if index >= levels.size():
 				continue
 			var data: Dictionary = levels[index]
@@ -223,8 +234,8 @@ func show_map() -> void:
 					label += "  %d/3" % int(GameData.shards.get(index, 0))
 				elif int(GameData.shards.get(index, 0)) > 0:
 					label += "  OK"
-			var b := make_button(label if index <= GameData.unlocked else "- - -", 17)
-			b.custom_minimum_size = Vector2(118, 42)
+			var b := make_button(label if index <= GameData.unlocked else "- - -", 15)
+			b.custom_minimum_size = Vector2(100, 36)
 			b.disabled = index > GameData.unlocked
 			b.pressed.connect(go_to_level.bind(index))
 			row.add_child(b)
@@ -301,8 +312,7 @@ func make_item_row(item: Dictionary) -> Control:
 	panel.add_child(row)
 
 	if item["type"] == "perso":
-		var pic := make_hero_preview(item["id"], "", 2.0)
-		pic.custom_minimum_size = Vector2(44, 44)
+		var pic := make_hero_preview(item["id"], "", 0.95)
 		row.add_child(pic)
 	elif item["type"] == "arme":
 		row.add_child(make_weapon_icon(item["id"]))

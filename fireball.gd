@@ -13,6 +13,7 @@ var damage := 1
 var radius := 6.0
 var t := 0.0
 var trail_timer := 0.0
+var hits: Array = []        # ennemis déjà touchés (le carreau traverse)
 
 
 func _ready() -> void:
@@ -35,8 +36,25 @@ func _ready() -> void:
 		"croissant":
 			radius = 10.0
 			life = 0.9
-	if level and team == "joueur":
-		level.add_light(self, 0.9, 0.9)
+		"balle":
+			radius = 4.0
+			life = 1.2
+		"plomb":
+			radius = 3.5
+			life = 0.38
+		"carreau":
+			radius = 5.0
+			life = 1.4
+		"poison":
+			radius = 7.0
+			gravity = 500.0
+		"flamme":
+			radius = 8.0
+			life = 3.0
+	if level and team == "joueur" and kind != "plomb":
+		level.add_light(self, 0.6 if kind == "balle" or kind == "carreau" else 0.9, 0.9)
+	elif level and kind == "flamme":
+		level.add_light(self, 0.8, 0.8)
 
 
 func get_hit_rect() -> Rect2:
@@ -57,7 +75,7 @@ func _physics_process(delta: float) -> void:
 			explode()
 			return
 		trail_timer -= delta
-		if trail_timer <= 0.0 and (kind == "feu" or kind == "ombre" or kind == "croissant"):
+		if trail_timer <= 0.0 and (kind == "feu" or kind == "ombre" or kind == "croissant" or kind == "flamme"):
 			trail_timer = 0.03
 			level.fx.spawn(position + Vector2(randf_range(-3, 3), randf_range(-3, 3)), -velocity * 0.1, Color(1, 1, 1, 0.7), 0.3, 3.0)
 	queue_redraw()
@@ -101,6 +119,34 @@ func _draw() -> void:
 			var wave := PackedVector2Array([Vector2(-10, 10), Vector2(-4, -h * 0.5), Vector2(0, -h), Vector2(4, -h * 0.5), Vector2(10, 10)])
 			draw_colored_polygon(wave, Color(1, 1, 1, 0.85))
 			draw_polyline(wave, Color.BLACK, 1.5)
+		"balle", "plomb":
+			var dir := velocity.normalized()
+			var l := 10.0 if kind == "balle" else 5.0
+			draw_line(-dir * l * 2.5, Vector2.ZERO, Color(1, 1, 1, 0.3), radius * 1.2)
+			draw_line(-dir * l, dir * 2.0, Color.WHITE, radius)
+			draw_circle(dir * 2.0, radius * 0.5, Color.WHITE)
+		"carreau":
+			var dir := velocity.normalized()
+			var n := Vector2(-dir.y, dir.x)
+			draw_line(-dir * 12.0, dir * 6.0, Color.BLACK, 3.5)
+			draw_line(-dir * 12.0, dir * 6.0, Color.WHITE, 2.0)
+			draw_colored_polygon(PackedVector2Array([dir * 11.0, dir * 4.0 + n * 3.0, dir * 4.0 - n * 3.0]), Color.WHITE)
+			draw_line(-dir * 12.0, -dir * 8.0 + n * 3.0, Color(0.7, 0.7, 0.7), 1.5)
+			draw_line(-dir * 12.0, -dir * 8.0 - n * 3.0, Color(0.7, 0.7, 0.7), 1.5)
+		"poison":
+			draw_circle(Vector2.ZERO, 9.0, Color(1, 1, 1, 0.12))
+			draw_circle(Vector2.ZERO, 6.5, Color(0.2, 0.2, 0.2))
+			draw_arc(Vector2.ZERO, 6.5, 0.0, TAU, 14, Color.WHITE, 1.5)
+			draw_circle(Vector2(-2, -2), 1.8, Color.WHITE)
+			draw_circle(Vector2(2.5, 1.5), 1.0, Color(1, 1, 1, 0.6))
+		"flamme":
+			var flick := 1.0 + 0.2 * sin(t * 35.0)
+			var back := -velocity.normalized()
+			draw_circle(Vector2.ZERO, 13.0 * flick, Color(1, 1, 1, 0.15))
+			var tail := PackedVector2Array([Vector2(back.y, -back.x) * 7.0, back * 20.0 + Vector2(sin(t * 30.0), cos(t * 27.0)) * 3.0, -Vector2(back.y, -back.x) * 7.0])
+			draw_colored_polygon(tail, Color(1, 1, 1, 0.85))
+			draw_circle(Vector2.ZERO, 7.0 * flick, Color.WHITE)
+			draw_circle(back * 2.0, 3.5, Color(0.55, 0.55, 0.55))
 		"croissant":
 			var d := signf(velocity.x)
 			draw_circle(Vector2.ZERO, 14.0, Color(1, 1, 1, 0.12))

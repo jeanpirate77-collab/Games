@@ -4,12 +4,13 @@ Tout est généré en code : aucun fichier image importé.
 
 ## Contenu
 
-- **9 niveaux** dans 3 mondes : la Forêt morte, la Grotte, le Château (pluie et éclairs).
-- **3 boss** : le Corbeau, le Golem, le Roi Ombre. Chacun a plusieurs attaques et passe en « colère » à mi-vie.
-- **7 armes**, toujours visibles en main : épée, dague, hache, lance, marteau (onde de choc), faux (frappe tout autour), lame lunaire (lance un croissant). Plus la boule de feu et l'écrasement en sautant dessus.
-- **Ennemis** : marcheur, tireur, chauve-souris, sauteur, spectre.
+- **20 niveaux** dans 5 mondes : la Forêt morte, la Grotte, les Marais (acide), les Nuages (îles flottantes), le Château (pluie et éclairs).
+- **5 boss** : le Corbeau, le Golem, le Crapaud géant, le Dragon de brume, le Roi Ombre. Chacun a plusieurs attaques et passe en « colère » à mi-vie.
+- **10 armes**, toujours visibles en main : épée, dague, hache, lance, marteau (onde de choc), faux (frappe tout autour), lame lunaire (lance un croissant), **pistolet**, **fusil à pompe**, **arbalète** (traverse les ennemis). Plus la boule de feu et l'écrasement en sautant dessus.
+- **Ennemis** : marcheur, tireur, chauve-souris, sauteur, spectre, oeil volant, chevalier noir (on ne peut pas lui sauter dessus).
+- **Obstacles** : pics, acide, plateformes fragiles, ressorts, scies, jets de flammes, stalactites qui tombent, pendules, plateformes mobiles, caisses.
 - **À ramasser** : pièces, coeurs, 3 éclats de lune cachés par niveau, caisses cassables.
-- **7 personnages** : Ombre, Lune, Roc, Ninja (ruée offerte), Sorcière (triple feu), Chevalier (+2 coeurs), Spectre (double saut, plane).
+- **7 personnages** dessinés en formes lisses (écharpe ou cape qui flotte, yeux qui clignent) : Ombre, Lune, Roc, Ninja (ruée offerte), Sorcière (triple feu), Chevalier (+2 coeurs), Spectre (double saut, plane).
 - **Jusqu'à 16 coeurs** : Armure (5 niveaux), Cristal de vie (3 niveaux), un réceptacle de coeur après chaque boss, bonus de certains personnages.
 - **Magasin** : coeurs, bottes, forge, armes, boule de feu niv 2 et 3, double saut, ruée, aimant à pièces, personnages.
 - **Graphismes** : lumières dynamiques (joueur, lanternes, porte, boules de feu), filtre « film noir » (grain + lueur), brume, rayons de lune, silhouettes au premier plan, ombres au sol.
@@ -27,6 +28,7 @@ Tout est généré en code : aucun fichier image importé.
 | `fireball.gd` | Tous les projectiles |
 | `pickup.gd` | Pièces, coeurs, éclats |
 | `fx.gd` | Particules |
+| `obstacle.gd` | Acide, plateformes fragiles, ressorts, scies, flammes, stalactites, pendules, torches |
 | `canvas_layer.gd` | Boutons tactiles |
 | `menu.gd` | Écran titre, carte des niveaux, magasin |
 | `game_data.gd` | Pièces, achats, sauvegarde, statistiques (pas besoin d'Autoload) |
