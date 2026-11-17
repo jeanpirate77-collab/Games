@@ -7,10 +7,10 @@ const PlayerScript = preload("res://player.gd")
 # Écrans de menu construits en code : titre, carte des niveaux, magasin.
 
 const WORLD_NAMES := ["LA FORÊT MORTE", "LA GROTTE", "LE CHÂTEAU"]
-const TABS := ["ARMURE", "ARMES", "POUVOIRS", "PERSOS"]
+const TABS := ["COEURS", "ARMES", "POUVOIRS", "PERSOS"]
 
 var root: Control
-var current_tab := "ARMURE"
+var current_tab := "PERSOS"
 var message: Label
 
 
@@ -18,7 +18,7 @@ func _ready() -> void:
 	layer = 20
 	root = Control.new()
 	add_child(root)
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	match GameData.screen:
 		"carte":
@@ -86,13 +86,53 @@ func clear() -> void:
 func full_center() -> CenterContainer:
 	var cc := CenterContainer.new()
 	root.add_child(cc)
-	cc.set_anchors_preset(Control.PRESET_FULL_RECT)
+	cc.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	cc.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return cc
 
 
 func coins_text() -> String:
 	return "PIÈCES : %d     ÉCLATS : %d" % [GameData.coins, GameData.total_shards()]
+
+
+func item_name(id: String) -> String:
+	for item in GameData.ITEMS:
+		if item["id"] == id:
+			return item["nom"]
+	return id
+
+
+# Personnage (et arme) dessinés en grand, avec un halo
+func make_hero_preview(char_id: String, weapon_id: String, scale_k: float) -> Control:
+	var tex: Texture2D = PlayerScript.build_frames(char_id)["idle"]
+	var ctrl := Control.new()
+	ctrl.custom_minimum_size = Vector2(16, 18) * scale_k * 1.6
+	ctrl.draw.connect(func():
+		var c := ctrl.size * 0.5
+		for k in 3:
+			ctrl.draw_circle(c, (10.0 + k * 6.0) * scale_k, Color(1, 1, 1, 0.05))
+		if weapon_id != "":
+			ctrl.draw_set_transform(c, 0.0, Vector2(scale_k * 0.5, scale_k * 0.5))
+			var rest := Vector2(cos(deg_to_rad(-65.0)), sin(deg_to_rad(-65.0)))
+			PlayerScript.draw_weapon_shape(ctrl, Vector2(-4, 6) * 2.0, rest, weapon_id, 0.0)
+			ctrl.draw_set_transform(Vector2.ZERO)
+		var sz := Vector2(16, 16) * scale_k
+		ctrl.draw_texture_rect(tex, Rect2(c - sz * 0.5, sz), false)
+	)
+	ctrl.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	return ctrl
+
+
+# Icône d'arme pour le magasin
+func make_weapon_icon(weapon_id: String) -> Control:
+	var ctrl := Control.new()
+	ctrl.custom_minimum_size = Vector2(44, 44)
+	ctrl.draw.connect(func():
+		ctrl.draw_set_transform(ctrl.size * 0.5, 0.0, Vector2(1.1, 1.1))
+		PlayerScript.draw_weapon_shape(ctrl, Vector2(-11, 11), Vector2(1, -1).normalized(), weapon_id, 0.0)
+		ctrl.draw_set_transform(Vector2.ZERO)
+	)
+	return ctrl
 
 
 func go_to_level(index: int) -> void:
@@ -109,10 +149,11 @@ func show_title() -> void:
 	var cc := full_center()
 	var box := VBoxContainer.new()
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", 10)
+	box.add_theme_constant_override("separation", 6)
 	cc.add_child(box)
 
-	var title := make_label("OMBRES", 64)
+	var title := make_label("OMBRES", 58)
+	title.add_theme_constant_override("outline_size", 12)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 	var tw := title.create_tween().set_loops()
@@ -123,13 +164,11 @@ func show_title() -> void:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(sub)
 
-	var hero := TextureRect.new()
-	hero.texture = PlayerScript.build_frames(GameData.character)["idle"]
-	hero.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	hero.custom_minimum_size = Vector2(64, 64)
-	hero.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	hero.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	box.add_child(hero)
+	box.add_child(make_hero_preview(GameData.character, GameData.weapon, 2.6))
+	var equip_text := "%s  +  %s     COEURS : %d" % [item_name(GameData.character), item_name(GameData.weapon), GameData.max_hearts()]
+	var eq := make_label(equip_text, 14, Color(0.8, 0.8, 0.8))
+	eq.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(eq)
 
 	var play := make_button("JOUER", 26)
 	play.custom_minimum_size = Vector2(220, 50)
@@ -202,7 +241,7 @@ func show_shop() -> void:
 	GameData.screen = "magasin"
 	var margin := MarginContainer.new()
 	root.add_child(margin)
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 16)
 	var box := VBoxContainer.new()
@@ -262,13 +301,11 @@ func make_item_row(item: Dictionary) -> Control:
 	panel.add_child(row)
 
 	if item["type"] == "perso":
-		var pic := TextureRect.new()
-		pic.texture = PlayerScript.build_frames(item["id"])["idle"]
-		pic.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		pic.custom_minimum_size = Vector2(40, 40)
-		pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		var pic := make_hero_preview(item["id"], "", 2.0)
+		pic.custom_minimum_size = Vector2(44, 44)
 		row.add_child(pic)
+	elif item["type"] == "arme":
+		row.add_child(make_weapon_icon(item["id"]))
 
 	var texts := VBoxContainer.new()
 	texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL

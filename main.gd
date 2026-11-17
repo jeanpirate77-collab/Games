@@ -14,6 +14,8 @@ const INVINCIBLE_TIME := 1.2
 const PARALLAX_W := 1200.0
 const ENEMY_CHARS := {"w": "marcheur", "s": "tireur", "f": "chauve-souris", "j": "sauteur", "g": "spectre"}
 const HEART := [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
+const POST_FX := true            # grain + lueur « film noir » (mettre false si l'écran devient noir)
+const DARKNESS := [0.62, 0.42, 0.55]   # luminosité ambiante par monde (forêt, grotte, château)
 
 var grid: Array = []
 var cols := 0
@@ -58,6 +60,11 @@ var boss_label: Label
 var pause_button: Button
 var panel: Control = null
 var touch = null
+var light_tex: GradientTexture2D
+var door_light: PointLight2D
+var fog_art: Node2D
+var tile_chunks: Array = []
+var canvas: CanvasItem = null   # tranche de décor en cours de dessin
 
 @onready var player = $Player
 
@@ -68,6 +75,12 @@ func _ready() -> void:
 	GameData.load_game()
 	GameData.setup_inputs()
 	GameData.taps.clear()
+	# Taille de référence 640x360 étirée sur tout l'écran (sinon tout est minuscule sur iPad)
+	var win := get_window()
+	win.content_scale_size = Vector2i(640, 360)
+	win.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	win.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+	light_tex = make_light_texture()
 	# Les scripts se détachent parfois après un rechargement : on les remet si besoin
 	ensure_script(player, "res://player.gd")
 	ensure_script($CanvasLayer, "res://canvas_layer.gd")
@@ -113,6 +126,7 @@ func start_menu() -> void:
 	add_child(camera)
 	camera.make_current()
 	update_zoom()
+	setup_foreground()
 	setup_vignette()
 	add_child(MenuScript.new())
 
@@ -146,12 +160,14 @@ func start_level() -> void:
 	add_child(deco)
 	move_child(deco, 0)  # dessiné avant le joueur
 	deco.draw.connect(draw_deco)
+	build_tile_chunks()
 	setup_camera()
 	setup_hud()
+	setup_foreground()
+	setup_lighting()
 	setup_vignette()
 	if world == 2:
 		setup_rain()
-	queue_redraw()
 	show_banner(level_data["nom"])
 
 
@@ -260,6 +276,7 @@ func spawn_boss(center: Vector2) -> void:
 	boss.ground_y = floor(gy / TILE) * TILE
 	boss.position = center
 	add_child(boss)
+	add_light(boss, 1.6, 0.7)
 	exit_open = false
 	exit_alpha = 0.0
 
@@ -414,7 +431,181 @@ func setup_vignette() -> void:
 	rect.stretch_mode = TextureRect.STRETCH_SCALE
 	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(rect)
-	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	if POST_FX:
+		setup_post_fx()
+
+
+# Filtre plein écran : lueur autour des zones claires + grain de pellicule
+const POST_SHADER := """
+shader_type canvas_item;
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
+uniform float grain_amount = 0.05;
+uniform float bloom_amount = 0.5;
+
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void fragment() {
+	vec3 base = texture(screen_tex, SCREEN_UV).rgb;
+	vec3 blur = textureLod(screen_tex, SCREEN_UV, 3.0).rgb * 0.6 + textureLod(screen_tex, SCREEN_UV, 5.0).rgb * 0.4;
+	vec3 glow = max(blur - vec3(0.45), vec3(0.0)) * 1.8;
+	vec3 col = base + glow * bloom_amount;
+	float n = hash(floor(FRAGCOORD.xy / 2.0) + vec2(fract(TIME * 7.0) * 113.0));
+	col += (n - 0.5) * grain_amount;
+	float g = dot(col, vec3(0.299, 0.587, 0.114));
+	COLOR = vec4(vec3(g), 1.0);
+}
+"""
+
+
+func setup_post_fx() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 3
+	add_child(layer)
+	var shader := Shader.new()
+	shader.code = POST_SHADER
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	var rect := ColorRect.new()
+	rect.material = mat
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(rect)
+	rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+
+# ---------- Lumières 2D ----------
+
+func make_light_texture() -> GradientTexture2D:
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1, 1, 1, 1))
+	grad.set_color(1, Color(1, 1, 1, 0))
+	grad.add_point(0.35, Color(1, 1, 1, 0.55))
+	var tex := GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	tex.width = 256
+	tex.height = 256
+	return tex
+
+
+# Ajoute une lumière ronde à un objet (taille 1.0 = 256 px de diamètre)
+func add_light(node: Node, size: float, energy: float) -> PointLight2D:
+	var l := PointLight2D.new()
+	l.texture = light_tex
+	l.texture_scale = size
+	l.energy = energy
+	l.color = Color.WHITE
+	node.add_child(l)
+	return l
+
+
+func setup_lighting() -> void:
+	# assombrit le monde : seules les zones éclairées restent bien blanches
+	var cm := CanvasModulate.new()
+	var v: float = DARKNESS[world]
+	cm.color = Color(v, v, v)
+	add_child(cm)
+	add_light(player, 2.4, 0.85)
+	for cp in checkpoints:
+		var holder := Node2D.new()
+		holder.position = cp["pos"] + Vector2(0, -18)
+		add_child(holder)
+		cp["light"] = add_light(holder, 1.2, 0.25)
+	var door := Node2D.new()
+	door.position = exit_pos + Vector2(0, -12)
+	add_child(door)
+	door_light = add_light(door, 1.8, 0.0)
+
+
+# ---------- Premier plan, brume ----------
+
+func setup_foreground() -> void:
+	# silhouettes noires devant le joueur, qui défilent plus vite (profondeur)
+	var px := Parallax2D.new()
+	px.scroll_scale = Vector2(1.3, 1.0)
+	px.repeat_size = Vector2(900, 0)
+	px.repeat_times = 3
+	px.z_index = 15
+	var art := Node2D.new()
+	px.add_child(art)
+	art.draw.connect(draw_foreground.bind(art))
+	add_child(px)
+	# brume qui avance doucement
+	var fog := Parallax2D.new()
+	fog.scroll_scale = Vector2(0.8, 1.0)
+	fog.repeat_size = Vector2(PARALLAX_W, 0)
+	fog.repeat_times = 3
+	fog.z_index = 14
+	fog_art = Node2D.new()
+	fog.add_child(fog_art)
+	fog_art.draw.connect(draw_fog)
+	add_child(fog)
+
+
+func draw_foreground(art: Node2D) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 77 + world
+	var ink := Color(0, 0, 0, 0.92)
+	# bas de l'écran : herbes / rochers / tombes
+	var x := 0.0
+	while x < 900.0:
+		match world:
+			1:
+				var w := rng.randf_range(30, 70)
+				art.draw_colored_polygon(PackedVector2Array([Vector2(x, 400), Vector2(x + w * 0.3, 372 - rng.randf_range(0, 20)), Vector2(x + w * 0.7, 368 - rng.randf_range(0, 24)), Vector2(x + w, 400)]), ink)
+				x += w + rng.randf_range(60, 160)
+			2:
+				var h := rng.randf_range(16, 30)
+				art.draw_rect(Rect2(x, 384 - h, 4, h + 20), ink)
+				art.draw_colored_polygon(PackedVector2Array([Vector2(x - 3, 386 - h), Vector2(x + 2, 376 - h), Vector2(x + 7, 386 - h)]), ink)
+				x += 14.0
+			_:
+				for i in 5:
+					var bx := x + i * 5.0
+					var h := rng.randf_range(10, 34)
+					art.draw_colored_polygon(PackedVector2Array([Vector2(bx, 400), Vector2(bx + 5, 400), Vector2(bx + 2.5 + rng.randf_range(-6, 6), 384 - h)]), ink)
+				x += rng.randf_range(40, 140)
+	# haut de l'écran : lianes / stalactites / chaînes
+	x = rng.randf_range(0, 60)
+	while x < 900.0:
+		match world:
+			1:
+				var w := rng.randf_range(16, 40)
+				art.draw_colored_polygon(PackedVector2Array([Vector2(x - w * 0.5, -10), Vector2(x + w * 0.5, -10), Vector2(x, rng.randf_range(30, 70))]), ink)
+				x += rng.randf_range(50, 140)
+			2:
+				var len_c := rng.randf_range(30, 80)
+				var y := 0.0
+				while y < len_c:
+					art.draw_arc(Vector2(x, y), 3.5, 0.0, TAU, 8, ink, 2.0)
+					y += 7.0
+				x += rng.randf_range(120, 260)
+			_:
+				var len_v := rng.randf_range(20, 70)
+				var pts := PackedVector2Array()
+				for i in 8:
+					var k := i / 7.0
+					pts.append(Vector2(x + sin(k * 5.0 + x) * 4.0, -4.0 + k * len_v))
+				art.draw_polyline(pts, ink, 2.0)
+				for i in 3:
+					var leaf := pts[2 + i * 2]
+					art.draw_colored_polygon(PackedVector2Array([leaf, leaf + Vector2(5, 2), leaf + Vector2(1, 6)]), ink)
+				x += rng.randf_range(40, 120)
+
+
+func draw_fog() -> void:
+	var tt := Time.get_ticks_msec() * 0.001
+	var strength := 0.05 if world != 1 else 0.035
+	for i in 14:
+		var fx0 := fmod(i * 97.0 + tt * (6.0 + (i % 3) * 3.0), PARALLAX_W)
+		var fy := 300.0 + (i % 4) * 14.0 + sin(tt * 0.5 + i) * 5.0
+		fog_art.draw_set_transform(Vector2(fx0, fy), 0.0, Vector2(3.0, 0.6))
+		fog_art.draw_circle(Vector2.ZERO, 40.0 + (i % 3) * 12.0, Color(1, 1, 1, strength))
+	fog_art.draw_set_transform(Vector2.ZERO)
 
 
 func setup_hud() -> void:
@@ -445,7 +636,7 @@ func setup_hud() -> void:
 
 func layout_hud() -> void:
 	var s := get_viewport().get_visible_rect().size
-	coin_label.position = Vector2(36, 33)
+	coin_label.position = Vector2(36, 33 + heart_rows_offset())
 	pause_button.position = Vector2(s.x - 58, 8)
 	banner.position = Vector2(0, s.y * 0.2)
 	banner.size = Vector2(s.x, 40)
@@ -457,6 +648,7 @@ func update_hud() -> void:
 	if hud_draw == null:
 		return
 	coin_label.text = str(level_coins)
+	coin_label.position = Vector2(36, 33 + heart_rows_offset())
 	hud_draw.queue_redraw()
 
 
@@ -704,7 +896,7 @@ func break_crate(c: int, r: int) -> void:
 	fx.burst(center, 16, 160.0, Color.WHITE, 0.7, 3.5, 600.0, 120.0)
 	for i in 3:
 		spawn_pickup("piece", center, true)
-	queue_redraw()
+	redraw_tiles()
 
 
 func on_enemy_killed(e) -> void:
@@ -723,6 +915,9 @@ func on_boss_defeated(b) -> void:
 	for i in 15:
 		spawn_pickup("piece", b.position, true)
 	spawn_pickup("coeur", b.position, true)
+	# réceptacle de coeur : +1 coeur maximum pour toujours (une fois par boss)
+	if not GameData.containers.has(GameData.current_level):
+		spawn_pickup("receptacle", b.position + Vector2(0, -10), true)
 	shake(12.0)
 	var tw := create_tween()
 	tw.tween_property(self, "exit_alpha", 1.0, 1.0)
@@ -744,6 +939,15 @@ func collect(p) -> void:
 			fx.ring(p.position, 14.0, Color.WHITE, 0.6)
 			fx.burst(p.position, 20, 120.0, Color.WHITE, 0.8, 2.5)
 			freeze(0.06)
+		"receptacle":
+			GameData.containers[GameData.current_level] = true
+			GameData.save_game()
+			max_hearts += 1
+			hearts = max_hearts
+			popup("+1 COEUR MAXIMUM !", p.position)
+			fx.ring(p.position, 20.0, Color.WHITE, 0.8)
+			fx.burst(p.position, 30, 160.0, Color.WHITE, 0.9, 3.0)
+			freeze(0.1)
 	update_hud()
 
 
@@ -849,7 +1053,7 @@ func show_panel(title: String, text: String, buttons: Array) -> void:
 		panel.queue_free()
 	var cc := CenterContainer.new()
 	hud_layer.add_child(cc)
-	cc.set_anchors_preset(Control.PRESET_FULL_RECT)
+	cc.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var p := MenuScript.make_panel()
 	cc.add_child(p)
 	var box := VBoxContainer.new()
@@ -895,6 +1099,17 @@ func _process(delta: float) -> void:
 
 	if deco:
 		deco.queue_redraw()
+	if fog_art:
+		fog_art.queue_redraw()
+	var tt := Time.get_ticks_msec() * 0.001
+	for cp in checkpoints:
+		if cp.has("light"):
+			var l: PointLight2D = cp["light"]
+			l.enabled = cp["on"]
+			l.energy = 1.0 + 0.15 * sin(tt * 13.0 + l.global_position.x)
+	if door_light:
+		door_light.enabled = exit_alpha > 0.0
+		door_light.energy = exit_alpha * (1.1 + 0.2 * sin(tt * 3.0))
 	if world == 2:
 		update_weather(delta)
 	if boss != null:
@@ -974,12 +1189,14 @@ func draw_weather() -> void:
 
 func draw_hud() -> void:
 	var s := get_viewport().get_visible_rect().size
+	# coeurs : 8 par ligne
 	for i in max_hearts:
-		draw_heart(Vector2(14 + i * 24, 10), i < hearts)
+		draw_heart(Vector2(14 + (i % 8) * 24, 10 + floori(i / 8.0) * 22), i < hearts)
 	# pièce
-	hud_draw.draw_circle(Vector2(22, 46), 8.0, Color.BLACK)
-	hud_draw.draw_circle(Vector2(22, 46), 6.5, Color.WHITE)
-	hud_draw.draw_arc(Vector2(22, 46), 3.5, 0.0, TAU, 12, Color(0.35, 0.35, 0.35), 1.5)
+	var coin_y := 46.0 + heart_rows_offset()
+	hud_draw.draw_circle(Vector2(22, coin_y), 8.0, Color.BLACK)
+	hud_draw.draw_circle(Vector2(22, coin_y), 6.5, Color.WHITE)
+	hud_draw.draw_arc(Vector2(22, coin_y), 3.5, 0.0, TAU, 12, Color(0.35, 0.35, 0.35), 1.5)
 	# éclats de lune
 	if level_data.get("boss", "") == "":
 		for i in 3:
@@ -997,6 +1214,10 @@ func draw_hud() -> void:
 		hud_draw.draw_rect(Rect2(x - 2, y - 2, w + 4, 14), Color.BLACK)
 		hud_draw.draw_rect(Rect2(x, y, w * float(boss.hp) / float(boss.max_hp), 10), Color.WHITE)
 		hud_draw.draw_rect(Rect2(x - 2, y - 2, w + 4, 14), Color.WHITE, false, 1.5)
+
+
+func heart_rows_offset() -> float:
+	return (ceili(max_hearts / 8.0) - 1) * 22.0
 
 
 func draw_heart(pos: Vector2, full: bool) -> void:
@@ -1077,6 +1298,13 @@ func draw_sky() -> void:
 		sky.draw_rect(Rect2(p, Vector2(1.5, 1.5)), Color(1, 1, 1, rng.randf_range(0.2, 0.8)))
 	var m := Vector2(s.x * (0.78 if world == 0 else 0.25), s.y * 0.2)
 	var r := s.y * (0.08 if world == 0 else 0.13)
+	# rayons de lune
+	var sway := sin(Time.get_ticks_msec() * 0.0003) * 0.05
+	for k in 6:
+		var a := 1.75 + (k - 2.5) * 0.22 + sway
+		var d1 := Vector2(cos(a - 0.04), sin(a - 0.04)) * s.y * 1.6
+		var d2 := Vector2(cos(a + 0.04), sin(a + 0.04)) * s.y * 1.6
+		sky.draw_colored_polygon(PackedVector2Array([m, m + d1, m + d2]), Color(1, 1, 1, 0.025))
 	for k in 5:
 		sky.draw_circle(m, r * (1.3 + k * 0.45), Color(1, 1, 1, 0.035))
 	sky.draw_circle(m, r, Color(0.95, 0.95, 0.95))
@@ -1237,13 +1465,30 @@ func draw_branch(canvas: CanvasItem, start: Vector2, angle: float, length: float
 #  DESSIN : CASES DU NIVEAU (dessinées une fois, redessinées si une caisse casse)
 # =====================================================================
 
-func _draw() -> void:
-	if not in_level:
-		return
+func build_tile_chunks() -> void:
+	# le décor est découpé en tranches de 16 colonnes (plus rapide, et chaque tranche
+	# ne reçoit que les lumières proches)
+	var c0 := 0
+	while c0 < cols:
+		var chunk := Node2D.new()
+		add_child(chunk)
+		move_child(chunk, 0)
+		chunk.draw.connect(draw_chunk.bind(chunk, c0, mini(c0 + 16, cols)))
+		tile_chunks.append(chunk)
+		c0 += 16
+
+
+func redraw_tiles() -> void:
+	for chunk in tile_chunks:
+		chunk.queue_redraw()
+
+
+func draw_chunk(chunk: Node2D, c0: int, c1: int) -> void:
+	canvas = chunk
 	var rng := RandomNumberGenerator.new()
 	for r in rows:
 		var line: String = grid[r]
-		for c in cols:
+		for c in range(c0, c1):
 			var ch := line[c]
 			rng.seed = tile_hash(c, r)
 			match ch:
@@ -1277,46 +1522,56 @@ func draw_tile(c: int, r: int, rng: RandomNumberGenerator) -> void:
 	var rect := Rect2(x, y, TILE, TILE)
 	var shade: float = [1.0, 1.0, 0.8, 0.62, 0.5][depth_of(c, r)]
 	var base := Color(shade, shade, shade)
-	draw_rect(rect, base)
+	canvas.draw_rect(rect, base)
 	var ink := Color(0, 0, 0, 0.55 * shade)
 	var up := cell(c, r - 1) != "#"
 	var down := cell(c, r + 1) != "#"
+	# léger dégradé vertical dans chaque case (volume)
+	canvas.draw_rect(Rect2(x, y + 22, TILE, 10), Color(0, 0, 0, 0.08))
+	if cell(c - 1, r) != "#":
+		canvas.draw_line(Vector2(x + 1, y), Vector2(x + 1, y + TILE), Color.BLACK, 2.0)
+		canvas.draw_line(Vector2(x + 3, y + 2), Vector2(x + 3, y + TILE), Color(1, 1, 1, 0.5), 1.0)
+	if cell(c + 1, r) != "#":
+		canvas.draw_line(Vector2(x + TILE - 1, y), Vector2(x + TILE - 1, y + TILE), Color.BLACK, 2.0)
+		canvas.draw_line(Vector2(x + TILE - 4, y + 2), Vector2(x + TILE - 4, y + TILE), Color(0, 0, 0, 0.15), 2.0)
+	if down and r < rows - 1:
+		canvas.draw_line(Vector2(x, y + TILE - 1), Vector2(x + TILE, y + TILE - 1), Color.BLACK, 2.0)
 
 	match world:
 		1:
 			# roche : fissures
 			for i in 2:
 				var p := Vector2(x + rng.randf_range(4, 28), y + rng.randf_range(4, 28))
-				draw_line(p, p + Vector2(rng.randf_range(-7, 7), rng.randf_range(3, 8)), ink, 1.0)
+				canvas.draw_line(p, p + Vector2(rng.randf_range(-7, 7), rng.randf_range(3, 8)), ink, 1.0)
 			if down and r > 0:
 				# petites stalactites sous le plafond
 				var sx := x + rng.randf_range(6, 26)
 				var tri := PackedVector2Array([Vector2(sx - 4, y + TILE), Vector2(sx + 4, y + TILE), Vector2(sx, y + TILE + rng.randf_range(6, 14))])
-				draw_colored_polygon(tri, base)
-				draw_polyline(PackedVector2Array([tri[0], tri[2], tri[1]]), Color.BLACK, 1.0)
+				canvas.draw_colored_polygon(tri, base)
+				canvas.draw_polyline(PackedVector2Array([tri[0], tri[2], tri[1]]), Color.BLACK, 1.0)
 		2:
 			# briques
 			var mortar := Color(0, 0, 0, 0.4 * shade)
-			draw_line(Vector2(x, y + 16), Vector2(x + TILE, y + 16), mortar, 1.0)
-			draw_line(Vector2(x, y), Vector2(x + TILE, y), mortar, 1.0)
+			canvas.draw_line(Vector2(x, y + 16), Vector2(x + TILE, y + 16), mortar, 1.0)
+			canvas.draw_line(Vector2(x, y), Vector2(x + TILE, y), mortar, 1.0)
 			var off := 0.0 if r % 2 == 0 else 16.0
-			draw_line(Vector2(x + off, y), Vector2(x + off, y + 16), mortar, 1.0)
-			draw_line(Vector2(x + 16 - off + 8, y + 16), Vector2(x + 16 - off + 8, y + 32), mortar, 1.0)
+			canvas.draw_line(Vector2(x + off, y), Vector2(x + off, y + 16), mortar, 1.0)
+			canvas.draw_line(Vector2(x + 16 - off + 8, y + 16), Vector2(x + 16 - off + 8, y + 32), mortar, 1.0)
 			if rng.randi() % 7 == 0:
 				# lierre noir
 				var p := Vector2(x + rng.randf_range(4, 28), y)
 				for i in 4:
 					var q := p + Vector2(sin(i * 1.7) * 4.0, 7.0)
-					draw_line(p, q, Color.BLACK, 1.5)
-					draw_circle(q, 2.0, Color.BLACK)
+					canvas.draw_line(p, q, Color.BLACK, 1.5)
+					canvas.draw_circle(q, 2.0, Color.BLACK)
 					p = q
 		_:
 			# terre : cailloux et racines
 			if rng.randi() % 3 == 0:
-				draw_circle(Vector2(x + rng.randf_range(5, 27), y + rng.randf_range(8, 28)), rng.randf_range(1.0, 2.5), ink)
+				canvas.draw_circle(Vector2(x + rng.randf_range(5, 27), y + rng.randf_range(8, 28)), rng.randf_range(1.0, 2.5), ink)
 			if rng.randi() % 5 == 0:
 				var p := Vector2(x + rng.randf_range(4, 28), y + rng.randf_range(6, 20))
-				draw_line(p, p + Vector2(rng.randf_range(-6, 6), 8), ink, 1.0)
+				canvas.draw_line(p, p + Vector2(rng.randf_range(-6, 6), 8), ink, 1.0)
 
 	if up:
 		if world == 0:
@@ -1325,19 +1580,30 @@ func draw_tile(c: int, r: int, rng: RandomNumberGenerator) -> void:
 			while gx < x + TILE - 2.0:
 				var h := rng.randf_range(4.0, 9.0)
 				var lean := rng.randf_range(-2.0, 2.0)
-				draw_colored_polygon(PackedVector2Array([Vector2(gx, y + 5), Vector2(gx + 3, y + 5), Vector2(gx + 1.5 + lean, y + 5 - h)]), Color.BLACK)
+				canvas.draw_colored_polygon(PackedVector2Array([Vector2(gx, y + 5), Vector2(gx + 3, y + 5), Vector2(gx + 1.5 + lean, y + 5 - h)]), Color.BLACK)
 				gx += rng.randf_range(3.0, 5.0)
 			if rng.randi() % 6 == 0:
 				# petite fleur blanche
 				var fx0 := x + rng.randf_range(6, 26)
-				draw_line(Vector2(fx0, y + 2), Vector2(fx0, y - 6), Color.BLACK, 1.0)
-				draw_circle(Vector2(fx0, y - 7), 2.0, Color.WHITE)
-				draw_circle(Vector2(fx0, y - 7), 0.8, Color.BLACK)
+				canvas.draw_line(Vector2(fx0, y + 2), Vector2(fx0, y - 6), Color.BLACK, 1.0)
+				canvas.draw_circle(Vector2(fx0, y - 7), 2.0, Color.WHITE)
+				canvas.draw_circle(Vector2(fx0, y - 7), 0.8, Color.BLACK)
 		elif world == 1:
-			draw_line(Vector2(x, y + 1), Vector2(x + TILE, y + 1), Color(0.6, 0.6, 0.6), 2.0)
+			canvas.draw_line(Vector2(x, y + 1), Vector2(x + TILE, y + 1), Color(0.6, 0.6, 0.6), 2.0)
+			if rng.randi() % 5 == 0 and r > 2:
+				# cristaux lumineux
+				var cx := x + rng.randf_range(8, 24)
+				canvas.draw_circle(Vector2(cx, y - 6), 12.0, Color(1, 1, 1, 0.08))
+				for i in 3:
+					var h := rng.randf_range(8, 16)
+					var ox := (i - 1) * 5.0
+					var tilt := (i - 1) * 3.0
+					var cr := PackedVector2Array([Vector2(cx + ox - 2.5, y + 1), Vector2(cx + ox + tilt, y - h), Vector2(cx + ox + 2.5, y + 1)])
+					canvas.draw_colored_polygon(cr, Color.WHITE)
+					canvas.draw_polyline(cr, Color.BLACK, 1.0)
 		else:
-			draw_rect(Rect2(x, y, TILE, 4), Color(0.85, 0.85, 0.85))
-			draw_line(Vector2(x, y + 4), Vector2(x + TILE, y + 4), Color(0, 0, 0, 0.5), 1.0)
+			canvas.draw_rect(Rect2(x, y, TILE, 4), Color(0.85, 0.85, 0.85))
+			canvas.draw_line(Vector2(x, y + 4), Vector2(x + TILE, y + 4), Color(0, 0, 0, 0.5), 1.0)
 
 
 func draw_platform(c: int, r: int, rng: RandomNumberGenerator) -> void:
@@ -1346,39 +1612,39 @@ func draw_platform(c: int, r: int, rng: RandomNumberGenerator) -> void:
 	var rect := Rect2(x, y, TILE, 12)
 	match world:
 		1:
-			draw_rect(rect, Color(0.85, 0.85, 0.85))
-			draw_rect(rect, Color.BLACK, false, 1.0)
-			draw_line(Vector2(x + rng.randf_range(6, 26), y + 2), Vector2(x + rng.randf_range(6, 26), y + 10), Color(0, 0, 0, 0.5), 1.0)
+			canvas.draw_rect(rect, Color(0.85, 0.85, 0.85))
+			canvas.draw_rect(rect, Color.BLACK, false, 1.0)
+			canvas.draw_line(Vector2(x + rng.randf_range(6, 26), y + 2), Vector2(x + rng.randf_range(6, 26), y + 10), Color(0, 0, 0, 0.5), 1.0)
 			var tri := PackedVector2Array([Vector2(x + 10, y + 12), Vector2(x + 22, y + 12), Vector2(x + 16, y + 22)])
-			draw_colored_polygon(tri, Color(0.85, 0.85, 0.85))
-			draw_polyline(PackedVector2Array([tri[0], tri[2], tri[1]]), Color.BLACK, 1.0)
+			canvas.draw_colored_polygon(tri, Color(0.85, 0.85, 0.85))
+			canvas.draw_polyline(PackedVector2Array([tri[0], tri[2], tri[1]]), Color.BLACK, 1.0)
 		2:
-			draw_rect(rect, Color.WHITE)
-			draw_rect(rect, Color.BLACK, false, 1.0)
-			draw_line(Vector2(x + 16, y), Vector2(x + 16, y + 12), Color(0, 0, 0, 0.5), 1.0)
+			canvas.draw_rect(rect, Color.WHITE)
+			canvas.draw_rect(rect, Color.BLACK, false, 1.0)
+			canvas.draw_line(Vector2(x + 16, y), Vector2(x + 16, y + 12), Color(0, 0, 0, 0.5), 1.0)
 			# chaînes
 			if cell(c - 1, r) != "=" or cell(c + 1, r) != "=":
 				var cx := x + 6.0 if cell(c - 1, r) != "=" else x + 26.0
 				for i in 6:
-					draw_arc(Vector2(cx, y - 6 - i * 8), 3.0, 0.0, TAU, 8, Color(0.4, 0.4, 0.4), 1.5)
+					canvas.draw_arc(Vector2(cx, y - 6 - i * 8), 3.0, 0.0, TAU, 8, Color(0.4, 0.4, 0.4), 1.5)
 		_:
 			# planches de bois
-			draw_rect(rect, Color.WHITE)
-			draw_rect(rect, Color.BLACK, false, 1.0)
-			draw_line(Vector2(x, y + 6), Vector2(x + TILE, y + 6), Color(0, 0, 0, 0.4), 1.0)
-			draw_circle(Vector2(x + 4, y + 3), 1.0, Color.BLACK)
-			draw_circle(Vector2(x + 28, y + 9), 1.0, Color.BLACK)
-			draw_line(Vector2(x + 8, y + 12), Vector2(x + 6, y + 18), Color(0.7, 0.7, 0.7), 1.0)
+			canvas.draw_rect(rect, Color.WHITE)
+			canvas.draw_rect(rect, Color.BLACK, false, 1.0)
+			canvas.draw_line(Vector2(x, y + 6), Vector2(x + TILE, y + 6), Color(0, 0, 0, 0.4), 1.0)
+			canvas.draw_circle(Vector2(x + 4, y + 3), 1.0, Color.BLACK)
+			canvas.draw_circle(Vector2(x + 28, y + 9), 1.0, Color.BLACK)
+			canvas.draw_line(Vector2(x + 8, y + 12), Vector2(x + 6, y + 18), Color(0.7, 0.7, 0.7), 1.0)
 
 
 func draw_crate(c: int, r: int) -> void:
 	var rect := Rect2(c * TILE + 1, r * TILE + 1, TILE - 2, TILE - 2)
-	draw_rect(rect, Color.WHITE)
-	draw_rect(rect, Color.BLACK, false, 2.0)
+	canvas.draw_rect(rect, Color.WHITE)
+	canvas.draw_rect(rect, Color.BLACK, false, 2.0)
 	var inner := rect.grow(-5)
-	draw_rect(inner, Color.BLACK, false, 1.0)
-	draw_line(inner.position, inner.end, Color.BLACK, 1.5)
-	draw_line(Vector2(inner.end.x, inner.position.y), Vector2(inner.position.x, inner.end.y), Color.BLACK, 1.5)
+	canvas.draw_rect(inner, Color.BLACK, false, 1.0)
+	canvas.draw_line(inner.position, inner.end, Color.BLACK, 1.5)
+	canvas.draw_line(Vector2(inner.end.x, inner.position.y), Vector2(inner.position.x, inner.end.y), Color.BLACK, 1.5)
 
 
 func draw_spikes(c: int, r: int, ceiling: bool) -> void:
@@ -1391,8 +1657,8 @@ func draw_spikes(c: int, r: int, ceiling: bool) -> void:
 			tri = PackedVector2Array([Vector2(x0, y), Vector2(x0 + 8, y + 16), Vector2(x0 + 16, y)])
 		else:
 			tri = PackedVector2Array([Vector2(x0, y + TILE), Vector2(x0 + 8, y + TILE - 16), Vector2(x0 + 16, y + TILE)])
-		draw_colored_polygon(tri, Color.WHITE)
-		draw_polyline(tri, Color.BLACK, 1.5)
+		canvas.draw_colored_polygon(tri, Color.WHITE)
+		canvas.draw_polyline(tri, Color.BLACK, 1.5)
 
 
 # =====================================================================

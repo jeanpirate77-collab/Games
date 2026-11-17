@@ -281,6 +281,16 @@ func _physics_process(delta: float) -> void:
 		_:
 			update_walker(delta)
 	sprite.texture = frames_flash[pose] if flash > 0.0 else frames[pose]
+	queue_redraw()
+
+
+func _draw() -> void:
+	# ombre au sol
+	if dead or kind == "chauve-souris" or kind == "spectre" or not on_ground:
+		return
+	draw_set_transform(Vector2(0, 16), 0.0, Vector2(1.0, 0.3))
+	draw_circle(Vector2.ZERO, 12.0, Color(0, 0, 0, 0.45))
+	draw_set_transform(Vector2.ZERO)
 
 
 func update_walker(delta: float) -> void:

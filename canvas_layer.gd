@@ -1,6 +1,7 @@
 extends CanvasLayer
 
 const GameData = preload("res://game_data.gd")
+const PlayerScript = preload("res://player.gd")
 
 # Boutons tactiles dessinés en code (noir, contour blanc).
 #   à gauche : ◀ ▶          à droite : saut, attaque, feu, ruée (si achetée)
@@ -29,7 +30,7 @@ func _ready() -> void:
 
 func layout() -> void:
 	actions = ["ui_left", "ui_right", "ui_accept", "attaque", "feu"]
-	if GameData.get_level("dash") > 0:
+	if GameData.has_dash():
 		actions.append("dash")
 	for a in actions:
 		if not held.has(a):
@@ -129,11 +130,11 @@ func _on_draw() -> void:
 			"ui_accept":
 				drawer.draw_colored_polygon(PackedVector2Array([c + Vector2(0, -t), c + Vector2(-t, t * 0.6), c + Vector2(t, t * 0.6)]), Color.WHITE)
 			"attaque":
-				# épée
-				var a := c + Vector2(-t * 0.8, t * 0.8)
-				var b := c + Vector2(t * 0.9, -t * 0.9)
-				drawer.draw_line(a, b, Color.WHITE, 4.0)
-				drawer.draw_line(c + Vector2(-t * 0.75, t * 0.05), c + Vector2(-t * 0.05, t * 0.75), Color.WHITE, 4.0)
+				# l'arme équipée, dessinée en petit
+				var k := r / 36.0
+				drawer.draw_set_transform(c, 0.0, Vector2(k, k))
+				PlayerScript.draw_weapon_shape(drawer, Vector2(-11, 11), Vector2(1, -1).normalized(), GameData.weapon, 0.0)
+				drawer.draw_set_transform(Vector2.ZERO)
 			"feu":
 				# flamme
 				var flame := PackedVector2Array([

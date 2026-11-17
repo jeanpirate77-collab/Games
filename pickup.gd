@@ -2,7 +2,7 @@ extends Node2D
 
 const GameData = preload("res://game_data.gd")
 
-# Objet à ramasser : "piece", "coeur" ou "eclat". Créé par main.gd.
+# Objet à ramasser : "piece", "coeur", "eclat" ou "receptacle" (+1 coeur max pour toujours).
 
 var level = null
 var target = null           # le joueur
@@ -22,6 +22,8 @@ func _ready() -> void:
 	magnet = kind == "piece" and GameData.get_level("aimant") > 0
 	if falling:
 		pickup_delay = 0.25
+	if level and (kind == "eclat" or kind == "receptacle"):
+		level.add_light(self, 0.7, 0.8)
 
 
 func _physics_process(delta: float) -> void:
@@ -78,6 +80,19 @@ func _draw() -> void:
 			draw_colored_polygon(heart, Color.WHITE)
 			heart.append(heart[0])
 			draw_polyline(heart, Color.BLACK, 1.5)
+			draw_set_transform(Vector2.ZERO)
+		"receptacle":
+			# gros coeur avec un « + »
+			var s2 := 1.4 + 0.15 * sin(t * 5.0)
+			for k in 3:
+				draw_circle(Vector2.ZERO, 16.0 + k * 6.0, Color(1, 1, 1, 0.08))
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2(s2, s2))
+			var big := PackedVector2Array([Vector2(0, 8), Vector2(-8, 0), Vector2(-8, -4), Vector2(-5, -7), Vector2(-2, -7), Vector2(0, -4), Vector2(2, -7), Vector2(5, -7), Vector2(8, -4), Vector2(8, 0)])
+			draw_colored_polygon(big, Color.WHITE)
+			big.append(big[0])
+			draw_polyline(big, Color.BLACK, 1.2)
+			draw_line(Vector2(-3, -1), Vector2(3, -1), Color.BLACK, 1.5)
+			draw_line(Vector2(0, -4), Vector2(0, 2), Color.BLACK, 1.5)
 			draw_set_transform(Vector2.ZERO)
 		"eclat":
 			# croissant de lune qui brille

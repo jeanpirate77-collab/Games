@@ -7,15 +7,43 @@ extends RefCounted
 
 const SAVE_PATH := "user://sauvegarde.cfg"
 
+# Armes : dégâts, durée du coup (s), zone touchée (largeur, hauteur), style d'animation
+#   "arc" : coup de haut en bas   "pique" : coup droit devant   "tour" : tour complet
+const WEAPONS := {
+	"epee": {"degats": 1, "duree": 0.28, "zone": Vector2(40, 38), "style": "arc"},
+	"dague": {"degats": 1, "duree": 0.16, "zone": Vector2(30, 30), "style": "arc"},
+	"hache": {"degats": 2, "duree": 0.45, "zone": Vector2(40, 48), "style": "arc"},
+	"lance": {"degats": 1, "duree": 0.36, "zone": Vector2(68, 18), "style": "pique"},
+	"marteau": {"degats": 3, "duree": 0.6, "zone": Vector2(44, 52), "style": "arc"},
+	"faux": {"degats": 2, "duree": 0.5, "zone": Vector2(96, 54), "style": "tour"},
+	"lame": {"degats": 2, "duree": 0.3, "zone": Vector2(44, 40), "style": "arc"},
+}
+
+# Personnages : bonus de coeurs, vitesse, saut, recharge du feu, dégâts, pouvoirs offerts
+const CHARACTERS := {
+	"ombre": {"coeurs": 0, "vitesse": 1.0, "saut": -440.0, "feu": 1.0, "degats": 0, "pouvoirs": []},
+	"lune": {"coeurs": 0, "vitesse": 1.15, "saut": -480.0, "feu": 0.75, "degats": 0, "pouvoirs": []},
+	"roc": {"coeurs": 1, "vitesse": 0.9, "saut": -440.0, "feu": 1.0, "degats": 1, "pouvoirs": []},
+	"chevalier": {"coeurs": 2, "vitesse": 0.85, "saut": -430.0, "feu": 1.2, "degats": 1, "pouvoirs": []},
+	"ninja": {"coeurs": 0, "vitesse": 1.25, "saut": -460.0, "feu": 1.0, "degats": 0, "pouvoirs": ["dash"]},
+	"sorciere": {"coeurs": 0, "vitesse": 1.0, "saut": -440.0, "feu": 0.55, "degats": 0, "pouvoirs": ["triple"]},
+	"spectre": {"coeurs": 1, "vitesse": 1.05, "saut": -450.0, "feu": 0.9, "degats": 0, "pouvoirs": ["double_saut", "plane"]},
+}
+
 # Catalogue du magasin.
 #   type "niveau" : amélioration à plusieurs niveaux (prix[i] = prix du niveau i+1)
 #   type "arme" / "perso" : à acheter une fois, puis à équiper
 const ITEMS := [
-	{"id": "armure", "cat": "ARMURE", "nom": "Armure", "desc": "+1 coeur maximum par niveau", "prix": [60, 130, 220], "type": "niveau"},
-	{"id": "bottes", "cat": "ARMURE", "nom": "Bottes légères", "desc": "+10 % de vitesse par niveau", "prix": [80, 170], "type": "niveau"},
-	{"id": "epee", "cat": "ARMES", "nom": "Épée", "desc": "Rapide. Dégâts 1", "prix": [0], "type": "arme"},
+	{"id": "armure", "cat": "COEURS", "nom": "Armure", "desc": "+1 coeur maximum par niveau", "prix": [50, 100, 160, 240, 340], "type": "niveau"},
+	{"id": "cristal", "cat": "COEURS", "nom": "Cristal de vie", "desc": "+1 coeur maximum par niveau", "prix": [120, 250, 400], "type": "niveau"},
+	{"id": "bottes", "cat": "COEURS", "nom": "Bottes légères", "desc": "+10 % de vitesse par niveau", "prix": [80, 170], "type": "niveau"},
+	{"id": "epee", "cat": "ARMES", "nom": "Épée", "desc": "Équilibrée. Dégâts 1", "prix": [0], "type": "arme"},
+	{"id": "dague", "cat": "ARMES", "nom": "Dague", "desc": "Très rapide, courte. Dégâts 1", "prix": [60], "type": "arme"},
 	{"id": "hache", "cat": "ARMES", "nom": "Hache", "desc": "Lente mais dégâts 2", "prix": [110], "type": "arme"},
 	{"id": "lance", "cat": "ARMES", "nom": "Lance", "desc": "Très longue portée. Dégâts 1", "prix": [130], "type": "arme"},
+	{"id": "marteau", "cat": "ARMES", "nom": "Marteau", "desc": "Dégâts 3 + onde de choc au sol", "prix": [190], "type": "arme"},
+	{"id": "faux", "cat": "ARMES", "nom": "Faux", "desc": "Tourne et frappe des deux côtés. Dégâts 2", "prix": [230], "type": "arme"},
+	{"id": "lame", "cat": "ARMES", "nom": "Lame lunaire", "desc": "Dégâts 2 + lance un croissant de lune", "prix": [350], "type": "arme"},
 	{"id": "forge", "cat": "ARMES", "nom": "Forge", "desc": "+1 dégât pour toutes les armes", "prix": [90, 180, 300], "type": "niveau"},
 	{"id": "feu", "cat": "POUVOIRS", "nom": "Boule de feu", "desc": "Niv 2 : recharge rapide. Niv 3 : triple tir", "prix": [0, 90, 200], "type": "niveau"},
 	{"id": "double_saut", "cat": "POUVOIRS", "nom": "Double saut", "desc": "Sauter une 2e fois en l'air", "prix": [150], "type": "niveau"},
@@ -23,7 +51,11 @@ const ITEMS := [
 	{"id": "aimant", "cat": "POUVOIRS", "nom": "Aimant", "desc": "Attire les pièces proches", "prix": [70], "type": "niveau"},
 	{"id": "ombre", "cat": "PERSOS", "nom": "Ombre", "desc": "Équilibré", "prix": [0], "type": "perso"},
 	{"id": "lune", "cat": "PERSOS", "nom": "Lune", "desc": "Rapide, saute plus haut, feu plus rapide", "prix": [160], "type": "perso"},
-	{"id": "roc", "cat": "PERSOS", "nom": "Roc", "desc": "+1 coeur, +1 dégât, mais plus lent", "prix": [220], "type": "perso"},
+	{"id": "roc", "cat": "PERSOS", "nom": "Roc", "desc": "+1 coeur, +1 dégât, un peu lent", "prix": [220], "type": "perso"},
+	{"id": "ninja", "cat": "PERSOS", "nom": "Ninja", "desc": "Très rapide, ruée offerte", "prix": [260], "type": "perso"},
+	{"id": "sorciere", "cat": "PERSOS", "nom": "Sorcière", "desc": "Triple boule de feu, recharge très rapide", "prix": [280], "type": "perso"},
+	{"id": "chevalier", "cat": "PERSOS", "nom": "Chevalier", "desc": "+2 coeurs, +1 dégât, lent", "prix": [320], "type": "perso"},
+	{"id": "spectre", "cat": "PERSOS", "nom": "Spectre", "desc": "+1 coeur, double saut, plane (garder le saut)", "prix": [380], "type": "perso"},
 ]
 
 static var coins := 0
@@ -32,6 +64,7 @@ static var character := "ombre"
 static var weapon := "epee"
 static var unlocked := 0          # dernier niveau débloqué
 static var shards := {}           # index du niveau -> éclats trouvés (meilleur score)
+static var containers := {}       # réceptacles de coeur trouvés (un par boss)
 static var screen := "titre"      # "titre", "carte", "magasin" ou "niveau"
 static var current_level := 0
 static var taps := {}             # appuis récents (pour ne jamais rater un tap)
@@ -48,6 +81,7 @@ static func save_game() -> void:
 	cfg.set_value("jeu", "weapon", weapon)
 	cfg.set_value("jeu", "unlocked", unlocked)
 	cfg.set_value("jeu", "shards", shards)
+	cfg.set_value("jeu", "containers", containers)
 	cfg.save(SAVE_PATH)
 
 
@@ -64,6 +98,11 @@ static func load_game() -> void:
 	weapon = cfg.get_value("jeu", "weapon", "epee")
 	unlocked = cfg.get_value("jeu", "unlocked", 0)
 	shards = cfg.get_value("jeu", "shards", {})
+	containers = cfg.get_value("jeu", "containers", {})
+	if not WEAPONS.has(weapon):
+		weapon = "epee"
+	if not CHARACTERS.has(character):
+		character = "ombre"
 
 
 static func total_shards() -> int:
@@ -103,42 +142,56 @@ static func buy(item: Dictionary) -> bool:
 
 # ---------- Statistiques du joueur ----------
 
+static func char_stat(key: String):
+	var data: Dictionary = CHARACTERS.get(character, CHARACTERS["ombre"])
+	return data[key]
+
+
+static func weapon_stat(key: String):
+	var data: Dictionary = WEAPONS.get(weapon, WEAPONS["epee"])
+	return data[key]
+
+
+static func char_has(power: String) -> bool:
+	var powers: Array = char_stat("pouvoirs")
+	return powers.has(power)
+
+
 static func max_hearts() -> int:
-	return 3 + get_level("armure") + (1 if character == "roc" else 0)
+	return 3 + get_level("armure") + get_level("cristal") + containers.size() + int(char_stat("coeurs"))
 
 
 static func melee_damage() -> int:
-	var dmg := 2 if weapon == "hache" else 1
-	return dmg + get_level("forge") + (1 if character == "roc" else 0)
+	return int(weapon_stat("degats")) + get_level("forge") + int(char_stat("degats"))
 
 
 static func move_speed() -> float:
-	var s := 170.0 * (1.0 + 0.1 * get_level("bottes"))
-	if character == "lune":
-		s *= 1.15
-	elif character == "roc":
-		s *= 0.9
-	return s
+	return 170.0 * (1.0 + 0.1 * get_level("bottes")) * float(char_stat("vitesse"))
 
 
 static func jump_velocity() -> float:
-	return -480.0 if character == "lune" else -440.0
+	return float(char_stat("saut"))
 
 
 static func fire_delay() -> float:
 	var d := 1.0 if get_level("feu") >= 2 else 1.6
-	if character == "lune":
-		d *= 0.75
-	return d
+	return d * float(char_stat("feu"))
+
+
+static func fire_triple() -> bool:
+	return get_level("feu") >= 3 or char_has("triple")
+
+
+static func has_double_jump() -> bool:
+	return get_level("double_saut") > 0 or char_has("double_saut")
+
+
+static func has_dash() -> bool:
+	return get_level("dash") > 0 or char_has("dash")
 
 
 static func attack_length() -> float:
-	match weapon:
-		"hache":
-			return 0.45
-		"lance":
-			return 0.36
-	return 0.28
+	return float(weapon_stat("duree"))
 
 
 # ---------- Entrées ----------

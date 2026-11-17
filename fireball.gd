@@ -1,7 +1,7 @@
 extends Node2D
 
 # Projectile (joueur ou ennemi). Créé par main.gd avec spawn_projectile().
-#   kind : "feu" (joueur), "boule", "plume", "rocher", "onde", "ombre"
+#   kind : "feu" et "croissant" (joueur), "boule", "plume", "rocher", "onde", "ombre"
 
 var level = null
 var team := "ennemi"      # "joueur" ou "ennemi"
@@ -32,6 +32,11 @@ func _ready() -> void:
 		"ombre":
 			radius = 7.0
 			life = 5.0
+		"croissant":
+			radius = 10.0
+			life = 0.9
+	if level and team == "joueur":
+		level.add_light(self, 0.9, 0.9)
 
 
 func get_hit_rect() -> Rect2:
@@ -52,7 +57,7 @@ func _physics_process(delta: float) -> void:
 			explode()
 			return
 		trail_timer -= delta
-		if trail_timer <= 0.0 and (kind == "feu" or kind == "ombre"):
+		if trail_timer <= 0.0 and (kind == "feu" or kind == "ombre" or kind == "croissant"):
 			trail_timer = 0.03
 			level.fx.spawn(position + Vector2(randf_range(-3, 3), randf_range(-3, 3)), -velocity * 0.1, Color(1, 1, 1, 0.7), 0.3, 3.0)
 	queue_redraw()
@@ -96,6 +101,17 @@ func _draw() -> void:
 			var wave := PackedVector2Array([Vector2(-10, 10), Vector2(-4, -h * 0.5), Vector2(0, -h), Vector2(4, -h * 0.5), Vector2(10, 10)])
 			draw_colored_polygon(wave, Color(1, 1, 1, 0.85))
 			draw_polyline(wave, Color.BLACK, 1.5)
+		"croissant":
+			var d := signf(velocity.x)
+			draw_circle(Vector2.ZERO, 14.0, Color(1, 1, 1, 0.12))
+			var moon := PackedVector2Array()
+			for i in 9:
+				var a := -PI * 0.5 + PI * i / 8.0
+				moon.append(Vector2(cos(a) * 6.0 * d, sin(a) * 13.0))
+			for i in range(8, -1, -1):
+				var a := -PI * 0.5 + PI * i / 8.0
+				moon.append(Vector2(cos(a) * 1.0 * d, sin(a) * 9.0))
+			draw_colored_polygon(moon, Color.WHITE)
 		"ombre":
 			draw_circle(Vector2.ZERO, 11.0, Color(1, 1, 1, 0.12))
 			draw_circle(Vector2.ZERO, 7.0, Color.WHITE)
