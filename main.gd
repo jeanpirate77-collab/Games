@@ -1,84 +1,87 @@
 extends Node2D
 
-const EnemyScript := preload("res://enemy.gd")
-const FireballScript := preload("res://fireball.gd")
+const GameData = preload("res://game_data.gd")
+const Levels = preload("res://levels.gd")
+const EnemyScript = preload("res://enemy.gd")
+const BossScript = preload("res://boss.gd")
+const ProjectileScript = preload("res://fireball.gd")
+const PickupScript = preload("res://pickup.gd")
+const FxScript = preload("res://fx.gd")
+const MenuScript = preload("res://menu.gd")
 
-const GROUND_TOP := 280.0
-const GROUND_BOTTOM := 320.0
-const LEVEL_END := 5400.0
-const VIEW_HEIGHT := 360.0      # hauteur du monde visible à l'écran (règle le zoom)
+const TILE := 32
 const INVINCIBLE_TIME := 1.2
-const PIT_DEATH_Y := 420.0
-const EXIT_X := 5310.0
-const CAVE_X1 := 3020.0
-const CAVE_X2 := 4200.0
-const HILL_PERIOD := 1200.0
-const FIREBALL_SPEED := 150.0
+const PARALLAX_W := 1200.0
+const ENEMY_CHARS := {"w": "marcheur", "s": "tireur", "f": "chauve-souris", "j": "sauteur", "g": "spectre"}
+const HEART := [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."]
 
-# ---------- Description du niveau ----------
-# Sol : [x début, x fin]. Les trous entre les morceaux font perdre une vie.
-const GROUND := [[0, 1000], [1100, 1900], [2000, 2900], [3020, 4200], [4300, 5400]]
-# Plateformes fines (traversables par le dessous) : [x, y du dessus, largeur]
-const PLATFORMS := [
-	[620, 200, 120],
-	[1250, 225, 96], [1400, 175, 96], [1560, 125, 128],
-	[2450, 210, 160], [2700, 190, 80],
-	[2935, 240, 50],
-	[3250, 220, 100], [3500, 200, 120], [3800, 215, 100],
-	[4500, 215, 100], [4700, 170, 120], [4950, 220, 100],
-]
-# Blocs pleins : [x, y du dessus, taille]
-const BLOCKS := [[450, 248, 32], [2300, 248, 32], [2332, 248, 32], [2332, 216, 32], [4400, 248, 32]]
-# Pics : [x, nombre] (16 px chacun)
-const SPIKES := [[820, 2], [1470, 3], [2150, 2], [3400, 3], [3650, 2], [4600, 4], [5050, 2]]
-# Ennemis : [type, x, y, min_x, max_x]
-const ENEMIES := [
-	["tireur", 920, 264, 0, 0],
-	["marcheur", 1500, 264, 1300, 1700],
-	["marcheur", 2100, 264, 2040, 2280],
-	["marcheur", 2550, 194, 2465, 2595],
-	["tireur", 2850, 264, 0, 0],
-	["marcheur", 3200, 264, 3080, 3380],
-	["marcheur", 3850, 264, 3700, 4000],
-	["tireur", 4150, 264, 0, 0],
-	["marcheur", 4500, 264, 4440, 4590],
-	["marcheur", 4760, 154, 4712, 4808],
-	["tireur", 5200, 264, 0, 0],
-]
-const CHECKPOINTS := [1150, 2050, 3070, 4350]
-const TREES := [120, 380, 760, 1180, 1750, 2080, 2620, 4380, 4880, 5150]
+var grid: Array = []
+var cols := 0
+var rows := 0
+var world := 0
+var level_data: Dictionary = {}
+var in_level := false
 
-var lives := 3
-var score := 0
+var hearts := 3
+var max_hearts := 3
+var level_coins := 0
+var shards_found: Array = [false, false, false]
+var shard_count := 0
 var invincible := 0.0
 var finished := false
-var respawn_point := Vector2(200, 100)
-var checkpoint_on: Array[bool] = []
-var spike_areas: Array[Area2D] = []
+var respawn_point := Vector2.ZERO
+var checkpoints: Array = []
+var exit_pos := Vector2(-1000, -1000)
+var exit_open := true
+var exit_alpha := 1.0
+var boss = null
+var movers: Array = []
+var crates := {}
+var time := 0.0
+var look := 0.0
+var shake_amount := 0.0
+var flash_alpha := 0.0
+var next_lightning := 5.0
+var ambient_timer := 0.0
+var rain: Array = []
 
 var camera: Camera2D
+var fx
 var sky: Node2D
-var hud_label: Label
-var message_label: Label
+var deco: Node2D
+var weather: Node2D
+var hud_layer: CanvasLayer
+var hud_draw: Node2D
+var coin_label: Label
+var banner: Label
+var boss_label: Label
+var pause_button: Button
+var panel: Control = null
+var touch = null
 
-@onready var player = $Player  # non typé : on accède à can_control, bounce()...
+@onready var player = $Player
 
 
 func _ready() -> void:
+	Engine.time_scale = 1.0
+	get_tree().paused = false
+	GameData.load_game()
+	GameData.setup_inputs()
+	GameData.taps.clear()
 	# Les scripts se détachent parfois après un rechargement : on les remet si besoin
 	ensure_script(player, "res://player.gd")
 	ensure_script($CanvasLayer, "res://canvas_layer.gd")
-
-	for i in CHECKPOINTS.size():
-		checkpoint_on.append(false)
-
-	setup_sky()
-	add_parallax_layer(0.2, Color(0.16, 0.16, 0.16), 215.0, 45.0, 1, false)
-	add_parallax_layer(0.5, Color(0.08, 0.08, 0.08), 255.0, 28.0, 4, true)
-	build_level()
-	setup_camera()
-	setup_hud()
-	queue_redraw()
+	touch = $CanvasLayer
+	# Le sol vient maintenant des cartes de levels.gd
+	if has_node("StaticBody2D"):
+		$StaticBody2D.queue_free()
+	fx = FxScript.new()
+	add_child(fx)
+	get_viewport().size_changed.connect(on_resize)
+	if GameData.screen == "niveau":
+		start_level()
+	else:
+		start_menu()
 
 
 func ensure_script(node: Node, path: String) -> void:
@@ -86,317 +89,1127 @@ func ensure_script(node: Node, path: String) -> void:
 		return
 	push_warning("Script manquant sur %s : rattaché automatiquement." % node.name)
 	node.set_script(load(path))
-	# _ready() n'est pas rappelé tout seul après set_script
-	node.call("_ready")
+	node.call("_ready")  # _ready() n'est pas rappelé tout seul après set_script
 	node.set_physics_process(true)
+	node.set_process(true)
 	node.set_process_input(true)
+	node.set_process_unhandled_input(true)
 
 
-# ---------- Construction du niveau ----------
+# =====================================================================
+#  MENU
+# =====================================================================
+
+func start_menu() -> void:
+	in_level = false
+	world = 0
+	player.visible = false
+	player.process_mode = Node.PROCESS_MODE_DISABLED
+	touch.visible = false
+	touch.process_mode = Node.PROCESS_MODE_DISABLED
+	setup_background()
+	camera = Camera2D.new()
+	camera.position = Vector2(0, 192)
+	add_child(camera)
+	camera.make_current()
+	update_zoom()
+	setup_vignette()
+	add_child(MenuScript.new())
+
+
+# =====================================================================
+#  CONSTRUCTION DU NIVEAU
+# =====================================================================
+
+func start_level() -> void:
+	in_level = true
+	var all: Array = Levels.LEVELS
+	GameData.current_level = clampi(GameData.current_level, 0, all.size() - 1)
+	level_data = all[GameData.current_level]
+	world = int(level_data["monde"])
+	grid = (level_data["carte"] as Array).duplicate()
+	rows = grid.size()
+	cols = String(grid[0]).length()
+	max_hearts = GameData.max_hearts()
+	hearts = max_hearts
+
+	player.level = self
+	player.apply_stats()
+	player.melee.connect(_on_player_melee)
+	player.fire.connect(_on_player_fire)
+	touch.player = player
+	touch.layout()
+
+	setup_background()
+	build_level()
+	deco = Node2D.new()
+	add_child(deco)
+	move_child(deco, 0)  # dessiné avant le joueur
+	deco.draw.connect(draw_deco)
+	setup_camera()
+	setup_hud()
+	setup_vignette()
+	if world == 2:
+		setup_rain()
+	queue_redraw()
+	show_banner(level_data["nom"])
+
 
 func build_level() -> void:
-	for seg in GROUND:
-		add_solid(Rect2(seg[0], GROUND_TOP, seg[1] - seg[0], GROUND_BOTTOM - GROUND_TOP), false)
-	for p in PLATFORMS:
-		add_solid(Rect2(p[0], p[1], p[2], 12), true)
-	for b in BLOCKS:
-		add_solid(Rect2(b[0], b[1], b[2], b[2]), false)
-	# murs invisibles aux deux bouts
-	add_solid(Rect2(-20, -400, 20, 800), false)
-	add_solid(Rect2(LEVEL_END, -400, 20, 800), false)
+	var solid_body := StaticBody2D.new()
+	add_child(solid_body)
+	var mover_index := 0
+	for r in rows:
+		var line: String = grid[r]
+		var c := 0
+		while c < cols:
+			var ch := line[c]
+			if ch == "#" or ch == "=":
+				# une seule forme de collision par suite de cases identiques
+				var start := c
+				while c < cols and line[c] == ch:
+					c += 1
+				add_run(solid_body, start, c, r, ch == "=")
+				continue
+			var center := Vector2(c * TILE + 16, r * TILE + 16)
+			match ch:
+				"P":
+					player.global_position = center
+					respawn_point = center
+					set_cell(c, r, ".")
+				"E":
+					exit_pos = center
+					set_cell(c, r, ".")
+				"C":
+					checkpoints.append({"pos": center, "on": false})
+					set_cell(c, r, ".")
+				"o":
+					spawn_pickup("piece", center)
+					set_cell(c, r, ".")
+				"h":
+					spawn_pickup("coeur", center)
+					set_cell(c, r, ".")
+				"*":
+					var p = spawn_pickup("eclat", center)
+					p.shard_id = shard_count
+					shard_count += 1
+					set_cell(c, r, ".")
+				"B":
+					add_crate(c, r)
+				"m":
+					add_mover(center, mover_index)
+					mover_index += 1
+					set_cell(c, r, ".")
+				"Z":
+					spawn_boss(center)
+					set_cell(c, r, ".")
+				_:
+					if ENEMY_CHARS.has(ch):
+						spawn_enemy(ENEMY_CHARS[ch], center)
+						set_cell(c, r, ".")
+			c += 1
 
-	for s in SPIKES:
-		var area := Area2D.new()
-		var shape := CollisionShape2D.new()
-		var rect := RectangleShape2D.new()
-		rect.size = Vector2(s[1] * 16 - 4, 10)
-		shape.shape = rect
-		area.position = Vector2(s[0] + s[1] * 8, GROUND_TOP - 5)
-		area.add_child(shape)
-		add_child(area)
-		spike_areas.append(area)
 
-	for e in ENEMIES:
-		add_enemy(e[0], e[1], e[2], e[3], e[4])
+func add_run(body: StaticBody2D, c0: int, c1: int, r: int, one_way: bool) -> void:
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	var h := 12.0 if one_way else float(TILE)
+	rect.size = Vector2((c1 - c0) * TILE, h)
+	shape.shape = rect
+	shape.position = Vector2(c0 * TILE + rect.size.x * 0.5, r * TILE + h * 0.5)
+	shape.one_way_collision = one_way
+	body.add_child(shape)
 
 
-func add_solid(rect: Rect2, one_way: bool) -> void:
+func add_crate(c: int, r: int) -> void:
 	var body := StaticBody2D.new()
 	var shape := CollisionShape2D.new()
-	var r := RectangleShape2D.new()
-	r.size = rect.size
-	shape.shape = r
-	shape.one_way_collision = one_way
-	body.position = rect.get_center()
+	var rect := RectangleShape2D.new()
+	rect.size = Vector2(TILE, TILE)
+	shape.shape = rect
+	body.position = Vector2(c * TILE + 16, r * TILE + 16)
 	body.add_child(shape)
 	add_child(body)
+	crates[Vector2i(c, r)] = body
 
 
-func add_enemy(kind: String, x: float, y: float, min_x: float, max_x: float) -> void:
+func add_mover(center: Vector2, index: int) -> void:
+	var body := AnimatableBody2D.new()
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = Vector2(96, 12)
+	shape.shape = rect
+	shape.one_way_collision = true
+	body.add_child(shape)
+	body.position = Vector2(center.x, center.y - 10.0)
+	add_child(body)
+	body.draw.connect(draw_mover.bind(body))
+	movers.append({"body": body, "base": body.position, "phase": PI * (index % 2)})
+
+
+func spawn_boss(center: Vector2) -> void:
+	var gy := center.y
+	while not is_solid(Vector2(center.x, gy)) and gy < rows * TILE:
+		gy += TILE
+	boss = BossScript.new()
+	boss.kind = level_data["boss"]
+	boss.level = self
+	boss.target = player
+	boss.arena_left = TILE
+	boss.arena_right = (cols - 1) * TILE
+	boss.ground_y = floor(gy / TILE) * TILE
+	boss.position = center
+	add_child(boss)
+	exit_open = false
+	exit_alpha = 0.0
+
+
+# ---------- Accès à la grille ----------
+
+func cell(c: int, r: int) -> String:
+	if c < 0 or c >= cols or rows == 0:
+		return "#"
+	var line: String = grid[clampi(r, 0, rows - 1)]
+	return line[c]
+
+
+func set_cell(c: int, r: int, ch: String) -> void:
+	var line: String = grid[r]
+	grid[r] = line.substr(0, c) + ch + line.substr(c + 1)
+
+
+func is_solid(p: Vector2, platforms := false) -> bool:
+	var c := int(floor(p.x / TILE))
+	var r := int(floor(p.y / TILE))
+	if c < 0 or c >= cols:
+		return true
+	if r < 0 or r >= rows:
+		return false
+	var line: String = grid[r]
+	var ch := line[c]
+	return ch == "#" or ch == "B" or (platforms and ch == "=")
+
+
+func world_bottom() -> float:
+	return float(rows * TILE)
+
+
+# ---------- Création d'objets ----------
+
+func spawn_enemy(kind: String, pos: Vector2):
 	var e = EnemyScript.new()
 	e.kind = kind
-	e.position = Vector2(x, y)
-	e.min_x = min_x
-	e.max_x = max_x
+	e.level = self
 	e.target = player
-	if kind == "tireur":
-		e.points = 200
-		e.shoot.connect(_on_enemy_shoot)
+	e.position = pos
 	add_child(e)
+	return e
 
 
-func _on_enemy_shoot(from_pos: Vector2, dir_x: float) -> void:
-	if finished:
-		return
-	var ball = FireballScript.new()
-	ball.position = Vector2(from_pos.x, from_pos.y + 6.0)  # à hauteur du sol
-	ball.velocity = Vector2(dir_x * FIREBALL_SPEED, 0)
-	add_child(ball)
+func spawn_projectile(pos: Vector2, vel: Vector2, team: String, kind: String, damage := 1):
+	var p = ProjectileScript.new()
+	p.level = self
+	p.team = team
+	p.kind = kind
+	p.velocity = vel
+	p.damage = damage
+	p.position = pos
+	add_child(p)
+	return p
 
 
-# ---------- Caméra ----------
+func spawn_pickup(kind: String, pos: Vector2, pop := false):
+	var p = PickupScript.new()
+	p.kind = kind
+	p.level = self
+	p.target = player
+	p.position = pos
+	if pop:
+		p.falling = true
+		p.vel = Vector2(randf_range(-90, 90), randf_range(-280, -180))
+	add_child(p)
+	return p
+
+
+func count_enemies(kind: String) -> int:
+	var n := 0
+	for e in group("ennemis"):
+		if not e.dead and e.kind == kind:
+			n += 1
+	return n
+
+
+# Liste non typée : on peut lire .dead, .kind... sans avertissement
+func group(group_name: String) -> Array:
+	return get_tree().get_nodes_in_group(group_name)
+
+
+func boss_alive() -> bool:
+	return boss != null and is_instance_valid(boss) and not boss.dead
+
+
+# =====================================================================
+#  CAMÉRA, HUD, EFFETS D'ÉCRAN
+# =====================================================================
 
 func setup_camera() -> void:
 	camera = Camera2D.new()
 	camera.limit_left = 0
-	camera.limit_right = int(LEVEL_END)
-	camera.limit_bottom = int(GROUND_BOTTOM)
-	camera.limit_top = -400
+	camera.limit_top = 0
+	camera.limit_right = cols * TILE
+	camera.limit_bottom = rows * TILE
 	camera.position_smoothing_enabled = true
-	camera.position_smoothing_speed = 6.0
-	camera.drag_vertical_enabled = true
-	camera.drag_top_margin = 0.3
-	camera.drag_bottom_margin = 0.1
+	camera.position_smoothing_speed = 7.0
 	player.add_child(camera)
 	camera.make_current()
-	get_viewport().size_changed.connect(update_zoom)
 	update_zoom()
 
 
 func update_zoom() -> void:
-	# Zoom pour que VIEW_HEIGHT pixels du monde remplissent la hauteur de l'écran
+	# la hauteur du niveau (12 cases) remplit exactement la hauteur de l'écran
 	var h := get_viewport().get_visible_rect().size.y
-	var z := h / VIEW_HEIGHT
+	var view_h := float(rows * TILE) if in_level else 384.0
+	var z := h / view_h
 	camera.zoom = Vector2(z, z)
 
 
-# ---------- HUD ----------
+func on_resize() -> void:
+	if sky:
+		sky.queue_redraw()
+	if camera:
+		update_zoom()
+	if hud_layer:
+		layout_hud()
+
+
+func shake(amount: float) -> void:
+	shake_amount = maxf(shake_amount, amount)
+
+
+func freeze(duration: float) -> void:
+	# « arrêt sur image » très court qui rend les coups plus percutants
+	Engine.time_scale = 0.05
+	await get_tree().create_timer(duration, true, false, true).timeout
+	Engine.time_scale = 1.0
+
+
+func setup_vignette() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 4
+	add_child(layer)
+	var grad := Gradient.new()
+	grad.set_color(0, Color(0, 0, 0, 0))
+	grad.set_color(1, Color(0, 0, 0, 0.7))
+	grad.add_point(0.55, Color(0, 0, 0, 0))
+	var tex := GradientTexture2D.new()
+	tex.gradient = grad
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 1.25)
+	tex.width = 256
+	tex.height = 256
+	var rect := TextureRect.new()
+	rect.texture = tex
+	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	rect.stretch_mode = TextureRect.STRETCH_SCALE
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(rect)
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+
 
 func setup_hud() -> void:
-	var hud := CanvasLayer.new()
-	hud.layer = 5
-	add_child(hud)
+	hud_layer = CanvasLayer.new()
+	hud_layer.layer = 5
+	hud_layer.process_mode = Node.PROCESS_MODE_ALWAYS  # les boutons marchent pendant la pause
+	add_child(hud_layer)
+	hud_draw = Node2D.new()
+	hud_layer.add_child(hud_draw)
+	hud_draw.draw.connect(draw_hud)
 
-	hud_label = Label.new()
-	hud_label.position = Vector2(16, 10)
-	style_label(hud_label, 20)
-	hud.add_child(hud_label)
-
-	message_label = Label.new()
-	style_label(message_label, 36)
-	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	message_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	message_label.visible = false
-	hud.add_child(message_label)
-	message_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	coin_label = MenuScript.make_label("0", 18)
+	hud_layer.add_child(coin_label)
+	banner = MenuScript.make_label("", 26)
+	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hud_layer.add_child(banner)
+	boss_label = MenuScript.make_label("", 14)
+	boss_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	boss_label.visible = false
+	hud_layer.add_child(boss_label)
+	pause_button = MenuScript.make_button("II", 18)
+	pause_button.custom_minimum_size = Vector2(46, 38)
+	pause_button.pressed.connect(toggle_pause)
+	hud_layer.add_child(pause_button)
+	layout_hud()
 	update_hud()
 
 
-func style_label(l: Label, size: int) -> void:
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", Color.WHITE)
-	l.add_theme_color_override("font_outline_color", Color.BLACK)
-	l.add_theme_constant_override("outline_size", 6)
+func layout_hud() -> void:
+	var s := get_viewport().get_visible_rect().size
+	coin_label.position = Vector2(36, 33)
+	pause_button.position = Vector2(s.x - 58, 8)
+	banner.position = Vector2(0, s.y * 0.2)
+	banner.size = Vector2(s.x, 40)
+	boss_label.position = Vector2(0, 8)
+	boss_label.size = Vector2(s.x, 20)
 
 
 func update_hud() -> void:
-	hud_label.text = "VIES : %d     SCORE : %d" % [lives, score]
+	if hud_draw == null:
+		return
+	coin_label.text = str(level_coins)
+	hud_draw.queue_redraw()
+
+
+func show_banner(text: String) -> void:
+	banner.text = text
+	banner.modulate.a = 0.0
+	var tw := banner.create_tween()
+	tw.tween_property(banner, "modulate:a", 1.0, 0.4)
+	tw.tween_interval(1.8)
+	tw.tween_property(banner, "modulate:a", 0.0, 0.8)
 
 
 func popup(text: String, pos: Vector2) -> void:
-	var l := Label.new()
-	l.text = text
-	style_label(l, 14)
-	l.position = pos + Vector2(-20, -44)
-	l.z_index = 10
+	var l := MenuScript.make_label(text, 14)
+	l.position = pos + Vector2(-40, -40)
+	l.size = Vector2(80, 20)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.z_index = 30
 	add_child(l)
 	var tw := l.create_tween()
 	tw.set_parallel(true)
-	tw.tween_property(l, "position:y", l.position.y - 30.0, 0.8)
-	tw.tween_property(l, "modulate:a", 0.0, 0.8)
+	tw.tween_property(l, "position:y", l.position.y - 30.0, 0.9)
+	tw.tween_property(l, "modulate:a", 0.0, 0.9).set_delay(0.3)
 	tw.chain().tween_callback(l.queue_free)
 
 
-# ---------- Boucle de jeu ----------
+# =====================================================================
+#  BOUCLE DE JEU
+# =====================================================================
 
 func _physics_process(delta: float) -> void:
+	if not in_level:
+		return
+	time += delta
+	for m in movers:
+		var body: AnimatableBody2D = m["body"]
+		var base: Vector2 = m["base"]
+		body.position.x = base.x + sin(time * 1.1 + float(m["phase"])) * 64.0
+		body.queue_redraw()
 	if finished:
 		return
 
 	if invincible > 0.0:
 		invincible -= delta
-		player.modulate.a = 0.3 if fmod(invincible, 0.2) < 0.1 else 1.0
+		player.modulate.a = 0.35 if fmod(invincible, 0.16) < 0.08 else 1.0
 		if invincible <= 0.0:
 			player.modulate.a = 1.0
 
 	check_checkpoints()
-	check_hazards()
-
-	if player.global_position.y > PIT_DEATH_Y:
-		invincible = 0.0  # tomber dans un trou coûte toujours une vie
-		hurt()
-	elif player.global_position.x > EXIT_X:
-		win()
+	check_enemies()
+	check_projectiles()
+	check_spikes()
+	if exit_open and player.global_position.distance_to(exit_pos) < 22.0:
+		level_complete()
+	elif player.global_position.y > world_bottom() + 48.0:
+		fell_in_pit()
 
 
 func check_checkpoints() -> void:
-	for i in CHECKPOINTS.size():
-		if not checkpoint_on[i] and player.global_position.x >= CHECKPOINTS[i] and player.is_on_floor():
-			checkpoint_on[i] = true
-			respawn_point = Vector2(CHECKPOINTS[i], 200)
-			popup("POINT DE PASSAGE", Vector2(CHECKPOINTS[i] - 30, 250))
-			queue_redraw()
+	for cp in checkpoints:
+		if not cp["on"] and player.global_position.distance_to(cp["pos"]) < 30.0:
+			cp["on"] = true
+			respawn_point = cp["pos"]
+			popup("POINT DE PASSAGE", cp["pos"])
+			fx.ring(cp["pos"] + Vector2(0, -14), 10.0, Color.WHITE, 0.5)
+			fx.burst(cp["pos"] + Vector2(0, -14), 12, 80.0, Color.WHITE, 0.6, 2.0, 0.0, 30.0)
 
 
-func check_hazards() -> void:
-	for e in get_tree().get_nodes_in_group("ennemis"):
-		if e.dead or not e.overlaps_body(player):
+func stomp_damage() -> int:
+	return 3 if GameData.character == "roc" else 2
+
+
+func check_enemies() -> void:
+	var pr: Rect2 = player.get_hit_rect()
+	for e in group("ennemis"):
+		if e.dead:
 			continue
-		# on tombe sur l'ennemi par le dessus : écrasé !
-		if player.velocity.y > 0.0 and player.global_position.y < e.global_position.y - 4.0:
-			stomp(e)
-		else:
-			hurt()
+		var er: Rect2 = e.get_hit_rect()
+		if not pr.intersects(er):
+			continue
+		# on tombe dessus par le dessus : écrasé !
+		if player.velocity.y > 30.0 and pr.end.y < er.position.y + 14.0 and e.stompable:
+			player.bounce()
+			e.take_damage(stomp_damage(), player.global_position.x)
+			fx.ring(Vector2(player.global_position.x, pr.end.y), 12.0, Color.WHITE, 0.3)
+		elif not player.is_invulnerable():
+			hurt_player(1, er.get_center().x)
 
-	for ball in get_tree().get_nodes_in_group("boules"):
-		if ball.overlaps_body(player) and hurt():
-			ball.queue_free()
-
-	for area in spike_areas:
-		if area.overlaps_body(player):
-			hurt()
-
-
-func stomp(e) -> void:
-	e.squash()
-	player.bounce()
-	score += e.points
-	update_hud()
-	popup("+%d" % e.points, e.global_position)
+	if boss_alive() and boss.is_harmful():
+		var br: Rect2 = boss.get_hit_rect()
+		if pr.intersects(br):
+			if player.velocity.y > 30.0 and pr.end.y < br.position.y + 16.0:
+				player.bounce()
+				boss.take_damage(1, player.global_position.x)
+			elif not player.is_invulnerable():
+				hurt_player(1, br.get_center().x)
 
 
-# Retourne true si le joueur a vraiment perdu une vie
-func hurt() -> bool:
-	if invincible > 0.0 or finished:
+func check_projectiles() -> void:
+	var pr: Rect2 = player.get_hit_rect()
+	for p in group("proj_ennemi"):
+		if p.is_queued_for_deletion():
+			continue
+		if pr.intersects(p.get_hit_rect()) and not player.is_invulnerable():
+			if hurt_player(p.damage, p.position.x):
+				p.explode()
+
+	var foes := group("ennemis")
+	for p in group("proj_joueur"):
+		if p.is_queued_for_deletion():
+			continue
+		var hr: Rect2 = p.get_hit_rect()
+		var hit := false
+		for e in foes:
+			if not e.dead and hr.intersects(e.get_hit_rect()):
+				e.take_damage(p.damage, p.position.x)
+				hit = true
+				break
+		if not hit and boss_alive() and boss.can_be_hit() and hr.intersects(boss.get_hit_rect()):
+			boss.take_damage(p.damage, p.position.x)
+			hit = true
+		if hit:
+			p.explode()
+
+
+func check_spikes() -> void:
+	if player.is_invulnerable() or invincible > 0.0:
+		return
+	var pr: Rect2 = player.get_hit_rect()
+	var c0 := int(floor(pr.position.x / TILE))
+	var c1 := int(floor(pr.end.x / TILE))
+	var r0 := int(floor(pr.position.y / TILE))
+	var r1 := int(floor(pr.end.y / TILE))
+	for r in range(r0, r1 + 1):
+		if r < 0 or r >= rows:
+			continue
+		for c in range(c0, c1 + 1):
+			var ch := cell(c, r)
+			var danger := Rect2()
+			if ch == "^":
+				danger = Rect2(c * TILE + 4, r * TILE + 18, 24, 14)
+			elif ch == "v":
+				danger = Rect2(c * TILE + 4, r * TILE, 24, 14)
+			else:
+				continue
+			if pr.intersects(danger):
+				hurt_player(1, c * TILE + 16.0)
+				return
+
+
+# Retourne true si le joueur a vraiment été touché
+func hurt_player(amount: int, from_x: float) -> bool:
+	if invincible > 0.0 or finished or player.dead:
 		return false
-	lives -= 1
+	hearts -= amount
+	shake(7.0)
+	fx.burst(player.global_position, 14, 150.0, Color.WHITE, 0.4, 2.5)
+	freeze(0.07)
 	update_hud()
-	if lives <= 0:
-		game_over()
-	else:
-		respawn()
+	if hearts <= 0:
+		hearts = 0
+		update_hud()
+		player_died()
+		return true
+	player.take_hit(from_x)
+	invincible = INVINCIBLE_TIME
 	return true
 
 
-func respawn() -> void:
-	for ball in get_tree().get_nodes_in_group("boules"):
-		ball.queue_free()
+func fell_in_pit() -> void:
+	if player.dead:
+		return
+	hearts -= 1
+	update_hud()
+	if hearts <= 0:
+		hearts = 0
+		player_died()
+		return
+	for p in group("proj_ennemi"):
+		p.queue_free()
 	player.global_position = respawn_point
 	player.velocity = Vector2.ZERO
 	camera.reset_smoothing()
 	invincible = INVINCIBLE_TIME
+	shake(4.0)
 
 
-func game_over() -> void:
-	end_game("GAME OVER\nSCORE : %d" % score, 2.5)
+# ---------- Attaques du joueur ----------
+
+func _on_player_melee(hit_rect: Rect2, damage: int) -> void:
+	var hit_any := false
+	for e in group("ennemis"):
+		if not e.dead and hit_rect.intersects(e.get_hit_rect()):
+			e.take_damage(damage, player.global_position.x)
+			hit_any = true
+	if boss_alive() and hit_rect.intersects(boss.get_hit_rect()):
+		if boss.take_damage(damage, player.global_position.x) or boss.can_be_hit():
+			hit_any = true
+	# l'arme détruit aussi les projectiles ennemis
+	for p in group("proj_ennemi"):
+		if hit_rect.intersects(p.get_hit_rect()):
+			p.explode()
+			hit_any = true
+	# et casse les caisses
+	var c0 := int(floor(hit_rect.position.x / TILE))
+	var c1 := int(floor(hit_rect.end.x / TILE))
+	var r0 := int(floor(hit_rect.position.y / TILE))
+	var r1 := int(floor(hit_rect.end.y / TILE))
+	for r in range(r0, r1 + 1):
+		for c in range(c0, c1 + 1):
+			if crates.has(Vector2i(c, r)):
+				break_crate(c, r)
+				hit_any = true
+	if hit_any:
+		shake(3.0)
+		freeze(0.04)
 
 
-func win() -> void:
-	score += lives * 500
+func _on_player_fire(from_pos: Vector2, dir_x: float) -> void:
+	var angles := [0.0]
+	if GameData.get_level("feu") >= 3:
+		angles = [-0.22, 0.0, 0.22]
+	for a in angles:
+		spawn_projectile(from_pos, Vector2(dir_x * 300.0, 0).rotated(a * dir_x), "joueur", "feu", 1)
+	fx.burst(from_pos, 6, 70.0, Color.WHITE, 0.25, 2.0)
+
+
+func on_projectile_wall(p) -> void:
+	if p.team != "joueur":
+		return
+	var c := int(floor(p.position.x / TILE))
+	var r := int(floor(p.position.y / TILE))
+	if crates.has(Vector2i(c, r)):
+		break_crate(c, r)
+
+
+func break_crate(c: int, r: int) -> void:
+	var key := Vector2i(c, r)
+	if not crates.has(key):
+		return
+	crates[key].queue_free()
+	crates.erase(key)
+	set_cell(c, r, ".")
+	var center := Vector2(c * TILE + 16, r * TILE + 16)
+	fx.burst(center, 16, 160.0, Color.WHITE, 0.7, 3.5, 600.0, 120.0)
+	for i in 3:
+		spawn_pickup("piece", center, true)
+	queue_redraw()
+
+
+func on_enemy_killed(e) -> void:
+	fx.burst(e.position, 18, 160.0, Color.WHITE, 0.5, 3.0)
+	fx.ring(e.position, 10.0, Color.WHITE, 0.35)
+	for i in e.coins:
+		spawn_pickup("piece", e.position, true)
+	shake(3.0)
+	freeze(0.05)
+
+
+func on_boss_defeated(b) -> void:
+	exit_open = true
+	boss_label.visible = false
+	popup("VICTOIRE !", b.position)
+	for i in 15:
+		spawn_pickup("piece", b.position, true)
+	spawn_pickup("coeur", b.position, true)
+	shake(12.0)
+	var tw := create_tween()
+	tw.tween_property(self, "exit_alpha", 1.0, 1.0)
+
+
+func collect(p) -> void:
+	match p.kind:
+		"piece":
+			level_coins += 1
+			fx.burst(p.position, 5, 60.0, Color.WHITE, 0.3, 2.0)
+		"coeur":
+			hearts = mini(max_hearts, hearts + 1)
+			popup("+1 COEUR", p.position)
+			fx.ring(p.position, 10.0, Color.WHITE, 0.4)
+		"eclat":
+			if p.shard_id >= 0 and p.shard_id < 3:
+				shards_found[p.shard_id] = true
+			popup("ÉCLAT DE LUNE !", p.position)
+			fx.ring(p.position, 14.0, Color.WHITE, 0.6)
+			fx.burst(p.position, 20, 120.0, Color.WHITE, 0.8, 2.5)
+			freeze(0.06)
 	update_hud()
-	end_game("BRAVO !\nSCORE : %d" % score, 4.0)
 
 
-func end_game(text: String, delay: float) -> void:
+# =====================================================================
+#  FIN DE NIVEAU, MORT, PAUSE
+# =====================================================================
+
+func level_complete() -> void:
 	finished = true
 	player.can_control = false
-	player.modulate.a = 1.0
-	if player.global_position.y > PIT_DEATH_Y:
-		player.set_physics_process(false)
-	message_label.text = text
-	message_label.visible = true
-	get_tree().create_timer(delay).timeout.connect(func(): get_tree().reload_current_scene())
+	player.velocity = Vector2.ZERO
+	touch.release_all()
+	touch.visible = false
+	var idx := GameData.current_level
+	var bonus := hearts * 5
+	var found: int = shards_found.count(true)
+	var is_boss: bool = level_data["boss"] != ""
+	if is_boss:
+		found = 1
+	GameData.coins += level_coins + bonus
+	GameData.shards[idx] = maxi(int(GameData.shards.get(idx, 0)), found)
+	GameData.unlocked = maxi(GameData.unlocked, mini(idx + 1, Levels.LEVELS.size() - 1))
+	GameData.save_game()
+
+	fx.burst(exit_pos, 30, 150.0, Color.WHITE, 0.8, 3.0, 0.0, 40.0)
+	var tw: Tween = player.create_tween()
+	tw.tween_property(player, "modulate:a", 0.0, 0.5)
+
+	var text := "Pièces : %d  (+%d bonus de coeurs)" % [level_coins, bonus]
+	if not is_boss:
+		text += "\nÉclats de lune : %d / 3" % found
+	var buttons := []
+	var title := "NIVEAU TERMINÉ !"
+	if idx + 1 < Levels.LEVELS.size():
+		buttons.append(["SUIVANT", next_level])
+	else:
+		title = "LE ROI OMBRE EST VAINCU !"
+		text += "\nMerci d'avoir joué !"
+	buttons.append(["MAGASIN", go_shop])
+	buttons.append(["CARTE", go_map])
+	await get_tree().create_timer(0.9).timeout
+	show_panel(title, text, buttons)
 
 
-# ---------- Décor (tout dessiné en code) ----------
+func player_died() -> void:
+	finished = true
+	player.die()
+	touch.release_all()
+	touch.visible = false
+	var kept := int(level_coins * 0.5)
+	GameData.coins += kept
+	GameData.save_game()
+	shake(10.0)
+	await get_tree().create_timer(1.3).timeout
+	show_panel("VAINCU...", "Tu gardes la moitié des pièces : %d" % kept,
+		[["RÉESSAYER", restart], ["MAGASIN", go_shop], ["CARTE", go_map]])
 
-func setup_sky() -> void:
+
+func toggle_pause() -> void:
+	if finished:
+		return
+	if get_tree().paused:
+		resume()
+		return
+	get_tree().paused = true
+	touch.release_all()
+	show_panel("PAUSE", level_data["nom"], [["REPRENDRE", resume], ["RECOMMENCER", restart], ["CARTE", go_map]])
+
+
+func resume() -> void:
+	get_tree().paused = false
+	touch.release_all()
+	if panel:
+		panel.queue_free()
+		panel = null
+
+
+func restart() -> void:
+	get_tree().paused = false
+	GameData.screen = "niveau"
+	get_tree().reload_current_scene()
+
+
+func next_level() -> void:
+	GameData.current_level += 1
+	restart()
+
+
+func go_map() -> void:
+	get_tree().paused = false
+	GameData.screen = "carte"
+	get_tree().reload_current_scene()
+
+
+func go_shop() -> void:
+	get_tree().paused = false
+	GameData.screen = "magasin"
+	get_tree().reload_current_scene()
+
+
+func show_panel(title: String, text: String, buttons: Array) -> void:
+	if panel:
+		panel.queue_free()
+	var cc := CenterContainer.new()
+	hud_layer.add_child(cc)
+	cc.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var p := MenuScript.make_panel()
+	cc.add_child(p)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	p.add_child(box)
+	var t := MenuScript.make_label(title, 28)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(t)
+	var l := MenuScript.make_label(text, 16, Color(0.85, 0.85, 0.85))
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(l)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+	for b in buttons:
+		var btn := MenuScript.make_button(b[0], 18)
+		btn.custom_minimum_size = Vector2(120, 44)
+		btn.pressed.connect(b[1])
+		row.add_child(btn)
+	cc.modulate.a = 0.0
+	var tw := cc.create_tween()
+	tw.tween_property(cc, "modulate:a", 1.0, 0.25)
+	panel = cc
+
+
+# =====================================================================
+#  EFFETS CONTINUS
+# =====================================================================
+
+func _process(delta: float) -> void:
+	if camera:
+		if in_level:
+			var target_look := 0.0
+			if not player.dead and not finished:
+				target_look = player.facing * 36.0
+			look = lerpf(look, target_look, minf(1.0, 3.0 * delta))
+		else:
+			camera.position.x += 25.0 * delta  # défilement lent derrière le menu
+		camera.offset = Vector2(look, 0) + Vector2(randf_range(-1, 1), randf_range(-1, 1)) * shake_amount
+		shake_amount = move_toward(shake_amount, 0.0, 30.0 * delta)
+		ambient(delta)
+
+	if deco:
+		deco.queue_redraw()
+	if world == 2:
+		update_weather(delta)
+	if boss != null:
+		if not is_instance_valid(boss):
+			boss = null
+			boss_label.visible = false
+		else:
+			boss_label.visible = not boss.dead
+			boss_label.text = boss.display_name
+		if hud_draw:
+			hud_draw.queue_redraw()
+
+
+func ambient(delta: float) -> void:
+	ambient_timer -= delta
+	if ambient_timer > 0.0:
+		return
+	ambient_timer = 0.12
+	var center := camera.get_screen_center_position()
+	var half := get_viewport().get_visible_rect().size / camera.zoom * 0.5
+	var p := center + Vector2(randf_range(-half.x, half.x), randf_range(-half.y, half.y))
+	match world:
+		0:
+			# lucioles
+			fx.spawn(p, Vector2(randf_range(-12, 12), randf_range(-14, -4)), Color(1, 1, 1, 0.9), 2.5, 2.0)
+		1:
+			# gouttes qui tombent du plafond
+			fx.spawn(Vector2(p.x, 66.0), Vector2(0, 20), Color(0.85, 0.85, 0.85, 0.8), 1.2, 2.0, 450.0)
+		2:
+			# cendres
+			fx.spawn(Vector2(p.x, center.y - half.y), Vector2(randf_range(-25, -5), 35), Color(0.7, 0.7, 0.7, 0.6), 5.0, 2.0)
+
+
+func setup_rain() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 1
+	add_child(layer)
+	weather = Node2D.new()
+	layer.add_child(weather)
+	weather.draw.connect(draw_weather)
+	var s := get_viewport().get_visible_rect().size
+	for i in 70:
+		rain.append(Vector2(randf() * s.x, randf() * s.y))
+
+
+func update_weather(delta: float) -> void:
+	next_lightning -= delta
+	if next_lightning <= 0.0:
+		next_lightning = randf_range(6.0, 12.0)
+		flash_alpha = 0.7
+		shake(2.0)
+	flash_alpha = move_toward(flash_alpha, 0.0, delta * 2.5)
+	if weather:
+		var s := get_viewport().get_visible_rect().size
+		for i in rain.size():
+			var d: Vector2 = rain[i]
+			d += Vector2(-120.0, 520.0) * delta
+			if d.y > s.y:
+				d = Vector2(randf() * (s.x + 100.0), -10.0)
+			rain[i] = d
+		weather.queue_redraw()
+	if sky:
+		sky.queue_redraw()
+
+
+func draw_weather() -> void:
+	for d in rain:
+		weather.draw_line(d, d + Vector2(-3, 11), Color(0.85, 0.85, 0.85, 0.35), 1.0)
+	if flash_alpha > 0.0:
+		var s := get_viewport().get_visible_rect().size
+		weather.draw_rect(Rect2(Vector2.ZERO, s), Color(1, 1, 1, flash_alpha * 0.25))
+
+
+# =====================================================================
+#  DESSIN : HUD
+# =====================================================================
+
+func draw_hud() -> void:
+	var s := get_viewport().get_visible_rect().size
+	for i in max_hearts:
+		draw_heart(Vector2(14 + i * 24, 10), i < hearts)
+	# pièce
+	hud_draw.draw_circle(Vector2(22, 46), 8.0, Color.BLACK)
+	hud_draw.draw_circle(Vector2(22, 46), 6.5, Color.WHITE)
+	hud_draw.draw_arc(Vector2(22, 46), 3.5, 0.0, TAU, 12, Color(0.35, 0.35, 0.35), 1.5)
+	# éclats de lune
+	if level_data.get("boss", "") == "":
+		for i in 3:
+			var c := Vector2(s.x - 80 - i * 22, 27)
+			if shards_found[2 - i]:
+				hud_draw.draw_circle(c, 7.0, Color.WHITE)
+				hud_draw.draw_circle(c + Vector2(3.5, -2.5), 6.0, Color.BLACK)
+			else:
+				hud_draw.draw_arc(c, 7.0, 0.0, TAU, 16, Color(0.45, 0.45, 0.45), 1.5)
+	# barre de vie du boss
+	if boss != null and is_instance_valid(boss) and not boss.dead:
+		var w := s.x * 0.42
+		var x := (s.x - w) * 0.5
+		var y := 30.0
+		hud_draw.draw_rect(Rect2(x - 2, y - 2, w + 4, 14), Color.BLACK)
+		hud_draw.draw_rect(Rect2(x, y, w * float(boss.hp) / float(boss.max_hp), 10), Color.WHITE)
+		hud_draw.draw_rect(Rect2(x - 2, y - 2, w + 4, 14), Color.WHITE, false, 1.5)
+
+
+func draw_heart(pos: Vector2, full: bool) -> void:
+	for y in 6:
+		var line: String = HEART[y]
+		for x in 7:
+			if line[x] == "#":
+				hud_draw.draw_rect(Rect2(pos + Vector2(x, y) * 3.0 - Vector2(1, 1), Vector2(5, 5)), Color.BLACK)
+	for y in 6:
+		var line: String = HEART[y]
+		for x in 7:
+			if line[x] == "#":
+				var col := Color.WHITE if full else Color(0.28, 0.28, 0.28)
+				hud_draw.draw_rect(Rect2(pos + Vector2(x, y) * 3.0, Vector2(3, 3)), col)
+
+
+# =====================================================================
+#  DESSIN : DÉCOR DE FOND (ciel + 2 couches en parallaxe par monde)
+# =====================================================================
+
+func setup_background() -> void:
 	var sky_layer := CanvasLayer.new()
 	sky_layer.layer = -10
 	add_child(sky_layer)
 	sky = Node2D.new()
 	sky_layer.add_child(sky)
 	sky.draw.connect(draw_sky)
-	get_viewport().size_changed.connect(sky.queue_redraw)
+	match world:
+		1:
+			add_parallax(0.2, draw_cave_far)
+			add_parallax(0.45, draw_cave_near)
+		2:
+			add_parallax(0.12, draw_castle_far)
+			add_parallax(0.4, draw_graveyard)
+		_:
+			add_parallax(0.15, draw_far_hills)
+			add_parallax(0.4, draw_near_forest)
 
 
-func draw_sky() -> void:
-	var s := get_viewport().get_visible_rect().size
-	# dégradé : noir en haut, gris sombre vers l'horizon
-	var bands := 32
-	for i in bands:
-		var t := float(i) / (bands - 1)
-		var g := lerpf(0.02, 0.3, t * t)
-		sky.draw_rect(Rect2(0, s.y * i / bands, s.x, s.y / bands + 1.0), Color(g, g, g))
-	# étoiles
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 7
-	for i in 60:
-		var p := Vector2(rng.randf() * s.x, rng.randf() * s.y * 0.55)
-		sky.draw_rect(Rect2(p, Vector2(1.5, 1.5)), Color(1, 1, 1, rng.randf_range(0.2, 0.8)))
-	# lune avec halo et cratères
-	var m := Vector2(s.x * 0.78, s.y * 0.2)
-	var r := s.y * 0.08
-	for k in 4:
-		sky.draw_circle(m, r * (1.4 + k * 0.5), Color(1, 1, 1, 0.04))
-	sky.draw_circle(m, r, Color(0.95, 0.95, 0.95))
-	sky.draw_circle(m + Vector2(-r * 0.3, -r * 0.2), r * 0.22, Color(0.78, 0.78, 0.78))
-	sky.draw_circle(m + Vector2(r * 0.35, r * 0.25), r * 0.15, Color(0.8, 0.8, 0.8))
-	sky.draw_circle(m + Vector2(-r * 0.1, r * 0.5), r * 0.1, Color(0.82, 0.82, 0.82))
-
-
-func add_parallax_layer(scroll: float, color: Color, base_y: float, amp: float, seed_value: int, with_trees: bool) -> void:
+func add_parallax(scroll: float, fn: Callable) -> void:
 	var px := Parallax2D.new()
 	px.scroll_scale = Vector2(scroll, 1.0)
-	px.repeat_size = Vector2(HILL_PERIOD, 0)
+	px.repeat_size = Vector2(PARALLAX_W, 0)
 	px.repeat_times = 3
 	px.z_index = -5
 	var art := Node2D.new()
 	px.add_child(art)
-	art.draw.connect(draw_hills.bind(art, color, base_y, amp, seed_value, with_trees))
+	art.draw.connect(fn.bind(art))
 	add_child(px)
 
 
-func draw_hills(art: Node2D, color: Color, base_y: float, amp: float, seed_value: int, with_trees: bool) -> void:
+func draw_sky() -> void:
+	var s := get_viewport().get_visible_rect().size
+	var top := 0.02
+	var bottom := 0.3
+	if world == 1:
+		top = 0.0
+		bottom = 0.08
+	elif world == 2:
+		top = 0.03
+		bottom = 0.22
+	var bands := 32
+	for i in bands:
+		var k := float(i) / (bands - 1)
+		var g := lerpf(top, bottom, k * k)
+		sky.draw_rect(Rect2(0, s.y * i / bands, s.x, s.y / bands + 1.0), Color(g, g, g))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	if world == 1:
+		# grotte : quelques cristaux qui scintillent au loin
+		for i in 25:
+			var p := Vector2(rng.randf() * s.x, rng.randf() * s.y)
+			var a := 0.15 + 0.15 * sin(Time.get_ticks_msec() * 0.002 + i)
+			sky.draw_rect(Rect2(p, Vector2(2, 2)), Color(1, 1, 1, a))
+		return
+	for i in 70:
+		var p := Vector2(rng.randf() * s.x, rng.randf() * s.y * 0.6)
+		sky.draw_rect(Rect2(p, Vector2(1.5, 1.5)), Color(1, 1, 1, rng.randf_range(0.2, 0.8)))
+	var m := Vector2(s.x * (0.78 if world == 0 else 0.25), s.y * 0.2)
+	var r := s.y * (0.08 if world == 0 else 0.13)
+	for k in 5:
+		sky.draw_circle(m, r * (1.3 + k * 0.45), Color(1, 1, 1, 0.035))
+	sky.draw_circle(m, r, Color(0.95, 0.95, 0.95))
+	sky.draw_circle(m + Vector2(-r * 0.3, -r * 0.2), r * 0.22, Color(0.8, 0.8, 0.8))
+	sky.draw_circle(m + Vector2(r * 0.35, r * 0.25), r * 0.15, Color(0.82, 0.82, 0.82))
+	sky.draw_circle(m + Vector2(-r * 0.1, r * 0.5), r * 0.1, Color(0.84, 0.84, 0.84))
+	if world == 2:
+		# nuages d'orage qui passent devant la lune
+		var tt := Time.get_ticks_msec() * 0.001
+		for i in 6:
+			var cx := fmod(i * 170.0 + tt * (8.0 + i * 2.0), s.x + 300.0) - 150.0
+			var cy := s.y * (0.12 + 0.07 * (i % 3))
+			for k in 4:
+				sky.draw_circle(Vector2(cx + k * 26.0, cy + sin(k * 1.7) * 6.0), 22.0 + (k % 2) * 8.0, Color(0.08, 0.08, 0.08, 0.85))
+		if flash_alpha > 0.0:
+			sky.draw_rect(Rect2(Vector2.ZERO, s), Color(1, 1, 1, flash_alpha * 0.5))
+
+
+func hill_y(x: float, base_y: float, amp: float, seed_value: float) -> float:
+	var t := x / PARALLAX_W * TAU
+	return base_y - amp * (0.6 * sin(t * 2.0 + seed_value) + 0.4 * sin(t * 5.0 + seed_value * 2.0))
+
+
+func draw_hill_band(art: Node2D, base_y: float, amp: float, seed_value: float, color: Color, rim: Color) -> void:
 	var pts := PackedVector2Array()
-	var steps := 80
-	for i in steps + 1:
-		var x := HILL_PERIOD * i / steps
-		var t := x / HILL_PERIOD * TAU
-		# sinus de période entière : le motif se répète sans couture
-		var y := base_y - amp * (0.6 * sin(t * 2.0 + seed_value) + 0.4 * sin(t * 5.0 + seed_value * 2.0))
-		pts.append(Vector2(x, y))
-	pts.append(Vector2(HILL_PERIOD, 460))
-	pts.append(Vector2(0, 460))
+	var top := PackedVector2Array()
+	for i in 81:
+		var x := PARALLAX_W * i / 80.0
+		var p := Vector2(x, hill_y(x, base_y, amp, seed_value))
+		pts.append(p)
+		top.append(p)
+	pts.append(Vector2(PARALLAX_W, 520))
+	pts.append(Vector2(0, 520))
 	art.draw_colored_polygon(pts, color)
-	if with_trees:
-		var rng := RandomNumberGenerator.new()
-		rng.seed = seed_value
-		for k in 6:
-			var tx := 100.0 + k * 190.0
-			var t2 := tx / HILL_PERIOD * TAU
-			var ty := base_y - amp * (0.6 * sin(t2 * 2.0 + seed_value) + 0.4 * sin(t2 * 5.0 + seed_value * 2.0))
-			draw_dead_tree(art, Vector2(tx, ty + 4.0), rng.randf_range(40, 70), color.darkened(0.6), rng)
+	art.draw_polyline(top, rim, 1.5)
+
+
+func draw_far_hills(art: Node2D) -> void:
+	draw_hill_band(art, 270.0, 50.0, 1.0, Color(0.15, 0.15, 0.15), Color(0.3, 0.3, 0.3))
+
+
+func draw_near_forest(art: Node2D) -> void:
+	draw_hill_band(art, 315.0, 26.0, 4.0, Color(0.08, 0.08, 0.08), Color(0.2, 0.2, 0.2))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	for k in 8:
+		var tx := 70.0 + k * 150.0
+		draw_dead_tree(art, Vector2(tx, hill_y(tx, 315.0, 26.0, 4.0) + 4.0), rng.randf_range(60, 110), Color(0.03, 0.03, 0.03), rng)
+	# brume
+	art.draw_rect(Rect2(0, 300, PARALLAX_W, 30), Color(1, 1, 1, 0.03))
+	art.draw_rect(Rect2(0, 312, PARALLAX_W, 30), Color(1, 1, 1, 0.03))
+
+
+func draw_cave_far(art: Node2D) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	var col := Color(0.09, 0.09, 0.09)
+	for k in 12:
+		var x := k * 100.0 + rng.randf_range(-20, 20)
+		var w := rng.randf_range(30, 70)
+		var h := rng.randf_range(60, 150)
+		art.draw_colored_polygon(PackedVector2Array([Vector2(x - w, 0), Vector2(x + w, 0), Vector2(x + rng.randf_range(-8, 8), h)]), col)
+		var h2 := rng.randf_range(60, 160)
+		art.draw_colored_polygon(PackedVector2Array([Vector2(x + 40 - w, 400), Vector2(x + 40 + w, 400), Vector2(x + 40, 400 - h2)]), col)
+	for i in 20:
+		var p := Vector2(rng.randf() * PARALLAX_W, rng.randf_range(120, 300))
+		art.draw_colored_polygon(PackedVector2Array([p + Vector2(0, -5), p + Vector2(3, 0), p + Vector2(0, 5), p + Vector2(-3, 0)]), Color(1, 1, 1, 0.25))
+
+
+func draw_cave_near(art: Node2D) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 9
+	var col := Color(0.045, 0.045, 0.045)
+	for k in 5:
+		var x := k * 240.0 + 60.0
+		var w := rng.randf_range(26, 44)
+		# colonne de roche
+		var pts := PackedVector2Array()
+		for i in 9:
+			var y := i * 50.0
+			pts.append(Vector2(x - w + sin(i * 1.3 + k) * 8.0, y))
+		for i in range(8, -1, -1):
+			var y := i * 50.0
+			pts.append(Vector2(x + w + cos(i * 1.1 + k) * 8.0, y))
+		art.draw_colored_polygon(pts, col)
+
+
+func draw_castle_far(art: Node2D) -> void:
+	var col := Color(0.13, 0.13, 0.13)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 21
+	art.draw_rect(Rect2(0, 260, PARALLAX_W, 260), col)
+	for k in 7:
+		var x := 40.0 + k * 170.0
+		var w := rng.randf_range(40, 70)
+		var h := rng.randf_range(90, 170)
+		var top := 260.0 - h
+		art.draw_rect(Rect2(x, top, w, h + 10), col)
+		# créneaux ou toit pointu
+		if k % 2 == 0:
+			for i in int(w / 12.0):
+				art.draw_rect(Rect2(x + i * 12.0, top - 8, 7, 8), col)
+		else:
+			art.draw_colored_polygon(PackedVector2Array([Vector2(x - 6, top), Vector2(x + w * 0.5, top - 50), Vector2(x + w + 6, top)]), col)
+		# fenêtres allumées
+		for i in 3:
+			if rng.randf() < 0.6:
+				art.draw_rect(Rect2(x + w * 0.5 - 3, top + 20 + i * 30, 6, 10), Color(0.75, 0.75, 0.75))
+	for i in 12:
+		var x := rng.randf() * PARALLAX_W
+		art.draw_rect(Rect2(x, 240, 6, 20), col)
+
+
+func draw_graveyard(art: Node2D) -> void:
+	draw_hill_band(art, 330.0, 14.0, 2.0, Color(0.06, 0.06, 0.06), Color(0.18, 0.18, 0.18))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	var col := Color(0.06, 0.06, 0.06)
+	for k in 16:
+		var x := 30.0 + k * 75.0 + rng.randf_range(-10, 10)
+		var y := hill_y(x, 330.0, 14.0, 2.0)
+		if k % 3 == 0:
+			art.draw_rect(Rect2(x - 2, y - 30, 4, 30), col)
+			art.draw_rect(Rect2(x - 10, y - 22, 20, 4), col)
+		else:
+			art.draw_rect(Rect2(x - 8, y - 18, 16, 18), col)
+			art.draw_circle(Vector2(x, y - 18), 8.0, col)
+	# grille en fer
+	for i in 60:
+		var x := i * 20.0
+		art.draw_line(Vector2(x, 300), Vector2(x, 345), Color(0.1, 0.1, 0.1), 2.0)
+		art.draw_colored_polygon(PackedVector2Array([Vector2(x - 3, 302), Vector2(x, 294), Vector2(x + 3, 302)]), Color(0.1, 0.1, 0.1))
+	art.draw_line(Vector2(0, 308), Vector2(PARALLAX_W, 308), Color(0.1, 0.1, 0.1), 2.0)
 
 
 func draw_dead_tree(canvas: CanvasItem, base: Vector2, height: float, color: Color, rng: RandomNumberGenerator) -> void:
@@ -420,113 +1233,218 @@ func draw_branch(canvas: CanvasItem, start: Vector2, angle: float, length: float
 		draw_branch(canvas, to, angle + side * rng.randf_range(0.3, 0.7), length * 0.6, maxf(1.0, width * 0.6), depth - 1, color, rng)
 
 
+# =====================================================================
+#  DESSIN : CASES DU NIVEAU (dessinées une fois, redessinées si une caisse casse)
+# =====================================================================
+
 func _draw() -> void:
+	if not in_level:
+		return
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 42
+	for r in rows:
+		var line: String = grid[r]
+		for c in cols:
+			var ch := line[c]
+			rng.seed = tile_hash(c, r)
+			match ch:
+				"#":
+					draw_tile(c, r, rng)
+				"=":
+					draw_platform(c, r, rng)
+				"B":
+					draw_crate(c, r)
+				"^":
+					draw_spikes(c, r, false)
+				"v":
+					draw_spikes(c, r, true)
 
-	# fond sombre de la grotte
-	draw_rect(Rect2(CAVE_X1, -400, CAVE_X2 - CAVE_X1, GROUND_TOP + 400), Color(0.035, 0.035, 0.035))
 
-	# arbres morts au premier plan
-	for x in TREES:
-		draw_dead_tree(self, Vector2(x, GROUND_TOP + 2), rng.randf_range(80, 130), Color(0.01, 0.01, 0.01), rng)
+func tile_hash(c: int, r: int) -> int:
+	return absi((c * 73856093) ^ (r * 19349663)) % 100000
 
-	# trous : bien noirs
-	for i in range(1, GROUND.size()):
-		var gap_x1: float = GROUND[i - 1][1]
-		var gap_x2: float = GROUND[i][0]
-		draw_rect(Rect2(gap_x1, GROUND_TOP, gap_x2 - gap_x1, 200), Color.BLACK)
 
-	# sol blanc + herbe noire
-	for seg in GROUND:
-		var r := Rect2(seg[0], GROUND_TOP, seg[1] - seg[0], 200)
-		draw_rect(r, Color.WHITE)
-		draw_grass(r, rng)
-		for k in int(r.size.x / 30.0):
-			var p := Vector2(rng.randf_range(r.position.x + 4, r.end.x - 4), rng.randf_range(GROUND_TOP + 12, GROUND_BOTTOM))
-			draw_circle(p, rng.randf_range(1.0, 2.5), Color(0.15, 0.15, 0.15))
+func depth_of(c: int, r: int) -> int:
+	# distance au bord le plus proche (pour assombrir l'intérieur des blocs)
+	for d in range(1, 4):
+		if cell(c, r - d) != "#" or cell(c, r + d) != "#" or cell(c - d, r) != "#" or cell(c + d, r) != "#":
+			return d
+	return 4
 
-	# plateformes
-	for p in PLATFORMS:
-		var r := Rect2(p[0], p[1], p[2], 12)
-		draw_rect(r, Color.WHITE)
-		draw_grass(r, rng)
-		draw_rect(r, Color.BLACK, false, 1.0)
-		# petites racines qui pendent
-		for k in int(r.size.x / 24.0):
-			var rx := r.position.x + 8.0 + k * 24.0
-			draw_line(Vector2(rx, r.end.y), Vector2(rx + rng.randf_range(-3, 3), r.end.y + rng.randf_range(4, 10)), Color(0.85, 0.85, 0.85), 1.0)
 
-	# blocs (caisses)
-	for b in BLOCKS:
-		var r := Rect2(b[0], b[1], b[2], b[2])
-		draw_rect(r, Color.WHITE)
-		draw_rect(r, Color.BLACK, false, 2.0)
-		var inner := r.grow(-5)
-		draw_rect(inner, Color.BLACK, false, 1.0)
-		draw_line(inner.position, inner.end, Color.BLACK, 1.0)
-		draw_line(Vector2(inner.end.x, inner.position.y), Vector2(inner.position.x, inner.end.y), Color.BLACK, 1.0)
+func draw_tile(c: int, r: int, rng: RandomNumberGenerator) -> void:
+	var x := float(c * TILE)
+	var y := float(r * TILE)
+	var rect := Rect2(x, y, TILE, TILE)
+	var shade: float = [1.0, 1.0, 0.8, 0.62, 0.5][depth_of(c, r)]
+	var base := Color(shade, shade, shade)
+	draw_rect(rect, base)
+	var ink := Color(0, 0, 0, 0.55 * shade)
+	var up := cell(c, r - 1) != "#"
+	var down := cell(c, r + 1) != "#"
 
-	# pics
-	for s in SPIKES:
-		for k in s[1]:
-			var x0: float = s[0] + k * 16
-			var tri := PackedVector2Array([Vector2(x0, GROUND_TOP), Vector2(x0 + 8, GROUND_TOP - 14), Vector2(x0 + 16, GROUND_TOP)])
-			draw_colored_polygon(tri, Color.WHITE)
-			draw_polyline(PackedVector2Array([tri[0], tri[1], tri[2]]), Color.BLACK, 1.5)
+	match world:
+		1:
+			# roche : fissures
+			for i in 2:
+				var p := Vector2(x + rng.randf_range(4, 28), y + rng.randf_range(4, 28))
+				draw_line(p, p + Vector2(rng.randf_range(-7, 7), rng.randf_range(3, 8)), ink, 1.0)
+			if down and r > 0:
+				# petites stalactites sous le plafond
+				var sx := x + rng.randf_range(6, 26)
+				var tri := PackedVector2Array([Vector2(sx - 4, y + TILE), Vector2(sx + 4, y + TILE), Vector2(sx, y + TILE + rng.randf_range(6, 14))])
+				draw_colored_polygon(tri, base)
+				draw_polyline(PackedVector2Array([tri[0], tri[2], tri[1]]), Color.BLACK, 1.0)
+		2:
+			# briques
+			var mortar := Color(0, 0, 0, 0.4 * shade)
+			draw_line(Vector2(x, y + 16), Vector2(x + TILE, y + 16), mortar, 1.0)
+			draw_line(Vector2(x, y), Vector2(x + TILE, y), mortar, 1.0)
+			var off := 0.0 if r % 2 == 0 else 16.0
+			draw_line(Vector2(x + off, y), Vector2(x + off, y + 16), mortar, 1.0)
+			draw_line(Vector2(x + 16 - off + 8, y + 16), Vector2(x + 16 - off + 8, y + 32), mortar, 1.0)
+			if rng.randi() % 7 == 0:
+				# lierre noir
+				var p := Vector2(x + rng.randf_range(4, 28), y)
+				for i in 4:
+					var q := p + Vector2(sin(i * 1.7) * 4.0, 7.0)
+					draw_line(p, q, Color.BLACK, 1.5)
+					draw_circle(q, 2.0, Color.BLACK)
+					p = q
+		_:
+			# terre : cailloux et racines
+			if rng.randi() % 3 == 0:
+				draw_circle(Vector2(x + rng.randf_range(5, 27), y + rng.randf_range(8, 28)), rng.randf_range(1.0, 2.5), ink)
+			if rng.randi() % 5 == 0:
+				var p := Vector2(x + rng.randf_range(4, 28), y + rng.randf_range(6, 20))
+				draw_line(p, p + Vector2(rng.randf_range(-6, 6), 8), ink, 1.0)
 
-	draw_cave_ceiling(rng)
-
-	# points de passage (lanternes)
-	for i in CHECKPOINTS.size():
-		var x: float = CHECKPOINTS[i]
-		draw_line(Vector2(x, GROUND_TOP), Vector2(x, GROUND_TOP - 34), Color(0.6, 0.6, 0.6), 2.0)
-		var lamp := Vector2(x, GROUND_TOP - 40)
-		if checkpoint_on[i]:
-			for k in 3:
-				draw_circle(lamp, 10.0 + k * 7.0, Color(1, 1, 1, 0.08))
-			draw_circle(lamp, 5.0, Color.WHITE)
+	if up:
+		if world == 0:
+			# herbe noire sur le dessus
+			var gx := x
+			while gx < x + TILE - 2.0:
+				var h := rng.randf_range(4.0, 9.0)
+				var lean := rng.randf_range(-2.0, 2.0)
+				draw_colored_polygon(PackedVector2Array([Vector2(gx, y + 5), Vector2(gx + 3, y + 5), Vector2(gx + 1.5 + lean, y + 5 - h)]), Color.BLACK)
+				gx += rng.randf_range(3.0, 5.0)
+			if rng.randi() % 6 == 0:
+				# petite fleur blanche
+				var fx0 := x + rng.randf_range(6, 26)
+				draw_line(Vector2(fx0, y + 2), Vector2(fx0, y - 6), Color.BLACK, 1.0)
+				draw_circle(Vector2(fx0, y - 7), 2.0, Color.WHITE)
+				draw_circle(Vector2(fx0, y - 7), 0.8, Color.BLACK)
+		elif world == 1:
+			draw_line(Vector2(x, y + 1), Vector2(x + TILE, y + 1), Color(0.6, 0.6, 0.6), 2.0)
 		else:
-			draw_arc(lamp, 5.0, 0.0, TAU, 16, Color(0.5, 0.5, 0.5), 1.5)
+			draw_rect(Rect2(x, y, TILE, 4), Color(0.85, 0.85, 0.85))
+			draw_line(Vector2(x, y + 4), Vector2(x + TILE, y + 4), Color(0, 0, 0, 0.5), 1.0)
+
+
+func draw_platform(c: int, r: int, rng: RandomNumberGenerator) -> void:
+	var x := float(c * TILE)
+	var y := float(r * TILE)
+	var rect := Rect2(x, y, TILE, 12)
+	match world:
+		1:
+			draw_rect(rect, Color(0.85, 0.85, 0.85))
+			draw_rect(rect, Color.BLACK, false, 1.0)
+			draw_line(Vector2(x + rng.randf_range(6, 26), y + 2), Vector2(x + rng.randf_range(6, 26), y + 10), Color(0, 0, 0, 0.5), 1.0)
+			var tri := PackedVector2Array([Vector2(x + 10, y + 12), Vector2(x + 22, y + 12), Vector2(x + 16, y + 22)])
+			draw_colored_polygon(tri, Color(0.85, 0.85, 0.85))
+			draw_polyline(PackedVector2Array([tri[0], tri[2], tri[1]]), Color.BLACK, 1.0)
+		2:
+			draw_rect(rect, Color.WHITE)
+			draw_rect(rect, Color.BLACK, false, 1.0)
+			draw_line(Vector2(x + 16, y), Vector2(x + 16, y + 12), Color(0, 0, 0, 0.5), 1.0)
+			# chaînes
+			if cell(c - 1, r) != "=" or cell(c + 1, r) != "=":
+				var cx := x + 6.0 if cell(c - 1, r) != "=" else x + 26.0
+				for i in 6:
+					draw_arc(Vector2(cx, y - 6 - i * 8), 3.0, 0.0, TAU, 8, Color(0.4, 0.4, 0.4), 1.5)
+		_:
+			# planches de bois
+			draw_rect(rect, Color.WHITE)
+			draw_rect(rect, Color.BLACK, false, 1.0)
+			draw_line(Vector2(x, y + 6), Vector2(x + TILE, y + 6), Color(0, 0, 0, 0.4), 1.0)
+			draw_circle(Vector2(x + 4, y + 3), 1.0, Color.BLACK)
+			draw_circle(Vector2(x + 28, y + 9), 1.0, Color.BLACK)
+			draw_line(Vector2(x + 8, y + 12), Vector2(x + 6, y + 18), Color(0.7, 0.7, 0.7), 1.0)
+
+
+func draw_crate(c: int, r: int) -> void:
+	var rect := Rect2(c * TILE + 1, r * TILE + 1, TILE - 2, TILE - 2)
+	draw_rect(rect, Color.WHITE)
+	draw_rect(rect, Color.BLACK, false, 2.0)
+	var inner := rect.grow(-5)
+	draw_rect(inner, Color.BLACK, false, 1.0)
+	draw_line(inner.position, inner.end, Color.BLACK, 1.5)
+	draw_line(Vector2(inner.end.x, inner.position.y), Vector2(inner.position.x, inner.end.y), Color.BLACK, 1.5)
+
+
+func draw_spikes(c: int, r: int, ceiling: bool) -> void:
+	var x := float(c * TILE)
+	var y := float(r * TILE)
+	for k in 2:
+		var x0 := x + k * 16.0
+		var tri := PackedVector2Array()
+		if ceiling:
+			tri = PackedVector2Array([Vector2(x0, y), Vector2(x0 + 8, y + 16), Vector2(x0 + 16, y)])
+		else:
+			tri = PackedVector2Array([Vector2(x0, y + TILE), Vector2(x0 + 8, y + TILE - 16), Vector2(x0 + 16, y + TILE)])
+		draw_colored_polygon(tri, Color.WHITE)
+		draw_polyline(tri, Color.BLACK, 1.5)
+
+
+# =====================================================================
+#  DESSIN : ÉLÉMENTS ANIMÉS (redessinés à chaque image)
+# =====================================================================
+
+func draw_deco() -> void:
+	var tt := time
+	# halo autour du joueur
+	if not player.dead:
+		for k in 3:
+			deco.draw_circle(player.global_position, 40.0 + k * 22.0, Color(1, 1, 1, 0.025))
+
+	# points de passage
+	for cp in checkpoints:
+		var p: Vector2 = cp["pos"]
+		deco.draw_line(p + Vector2(0, 16), p + Vector2(0, -10), Color(0.55, 0.55, 0.55), 3.0)
+		var lamp := p + Vector2(0, -18)
+		deco.draw_rect(Rect2(lamp - Vector2(6, 8), Vector2(12, 16)), Color.BLACK)
+		deco.draw_rect(Rect2(lamp - Vector2(6, 8), Vector2(12, 16)), Color(0.7, 0.7, 0.7), false, 1.5)
+		if cp["on"]:
+			var f := 1.0 + 0.2 * sin(tt * 14.0 + p.x)
+			for k in 3:
+				deco.draw_circle(lamp, (12.0 + k * 9.0) * f, Color(1, 1, 1, 0.07))
+			deco.draw_circle(lamp + Vector2(0, 2), 3.5 * f, Color.WHITE)
+		else:
+			deco.draw_circle(lamp + Vector2(0, 2), 2.0, Color(0.35, 0.35, 0.35))
 
 	# porte de sortie
-	var door := Rect2(EXIT_X - 14, GROUND_TOP - 64, 48, 64)
-	for k in 4:
-		draw_circle(door.get_center(), 30.0 + k * 12.0, Color(1, 1, 1, 0.05))
-	draw_rect(door, Color.WHITE)
-	draw_rect(door.grow(-6), Color.BLACK)
-	draw_circle(Vector2(door.end.x - 14, door.get_center().y + 4), 2.0, Color.WHITE)
+	if exit_alpha > 0.0:
+		var a := exit_alpha
+		var base := exit_pos + Vector2(0, 16)
+		var pulse := 0.5 + 0.5 * sin(tt * 3.0)
+		for k in 4:
+			deco.draw_circle(base + Vector2(0, -28), 30.0 + k * 12.0 + pulse * 4.0, Color(1, 1, 1, 0.04 * a))
+		var frame := PackedVector2Array([base + Vector2(-20, 0), base + Vector2(-20, -40), base + Vector2(-12, -54), base + Vector2(0, -58), base + Vector2(12, -54), base + Vector2(20, -40), base + Vector2(20, 0)])
+		deco.draw_colored_polygon(frame, Color(1, 1, 1, a))
+		var inner := PackedVector2Array([base + Vector2(-13, 0), base + Vector2(-13, -38), base + Vector2(-7, -48), base + Vector2(0, -51), base + Vector2(7, -48), base + Vector2(13, -38), base + Vector2(13, 0)])
+		deco.draw_colored_polygon(inner, Color(0, 0, 0, a))
+		deco.draw_circle(base + Vector2(0, -24), 6.0 + pulse * 3.0, Color(1, 1, 1, 0.5 * a))
+		deco.draw_circle(base + Vector2(0, -24), 3.0, Color(1, 1, 1, a))
+		if int(tt * 10.0) % 4 == 0:
+			fx.spawn(base + Vector2(randf_range(-10, 10), -4), Vector2(0, -30), Color(1, 1, 1, 0.7 * a), 1.0, 2.0)
 
 
-func draw_grass(r: Rect2, rng: RandomNumberGenerator) -> void:
-	var x := r.position.x
-	while x < r.end.x - 3.0:
-		var h := rng.randf_range(4.0, 9.0)
-		var lean := rng.randf_range(-2.0, 2.0)
-		var base_y := r.position.y + 5.0
-		draw_colored_polygon(PackedVector2Array([
-			Vector2(x, base_y), Vector2(x + 3.0, base_y), Vector2(x + 1.5 + lean, base_y - h)
-		]), Color.BLACK)
-		x += rng.randf_range(3.0, 6.0)
-
-
-func draw_cave_ceiling(rng: RandomNumberGenerator) -> void:
-	var edge := PackedVector2Array()
-	var x := CAVE_X1
-	while x <= CAVE_X2:
-		edge.append(Vector2(x, rng.randf_range(0.0, 18.0)))
-		x += 20.0
-	var poly := PackedVector2Array([Vector2(CAVE_X1, -400)])
-	poly.append_array(edge)
-	poly.append(Vector2(CAVE_X2, -400))
-	draw_colored_polygon(poly, Color.BLACK)
-	draw_polyline(edge, Color(0.75, 0.75, 0.75), 2.0)
-	# stalactites
-	x = CAVE_X1 + 30.0
-	while x < CAVE_X2 - 30.0:
-		var w := rng.randf_range(10.0, 22.0)
-		var drop := rng.randf_range(25.0, 70.0)
-		var tri := PackedVector2Array([Vector2(x - w / 2.0, 8), Vector2(x + w / 2.0, 8), Vector2(x + rng.randf_range(-3, 3), 8 + drop)])
-		draw_colored_polygon(tri, Color.BLACK)
-		draw_polyline(PackedVector2Array([tri[0], tri[2], tri[1]]), Color(0.75, 0.75, 0.75), 1.5)
-		x += rng.randf_range(45.0, 90.0)
+func draw_mover(body: AnimatableBody2D) -> void:
+	var rect := Rect2(-48, -6, 96, 12)
+	body.draw_rect(rect, Color.WHITE)
+	body.draw_rect(rect, Color.BLACK, false, 1.5)
+	for i in 3:
+		body.draw_line(Vector2(-16 + i * 16 - 16, -6), Vector2(-16 + i * 16 - 16, 6), Color(0, 0, 0, 0.4), 1.0)
+	# rune qui brille dessous
+	var glow := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.004)
+	body.draw_circle(Vector2(0, 12), 5.0, Color(1, 1, 1, 0.15 + 0.2 * glow))
+	body.draw_colored_polygon(PackedVector2Array([Vector2(0, 8), Vector2(4, 12), Vector2(0, 16), Vector2(-4, 12)]), Color.WHITE)
