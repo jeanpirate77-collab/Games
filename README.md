@@ -35,11 +35,30 @@ Tout est généré en code : aucun fichier image importé.
 | `canvas_layer.gd` | Boutons tactiles |
 | `menu.gd` | Écran titre, carte des niveaux, magasin |
 | `game_data.gd` | Pièces, achats, sauvegarde, statistiques (pas besoin d'Autoload) |
-| `levels.gd` | Les cartes des niveaux, en texte |
+| `levels.gd` | Charge les niveaux depuis `niveaux.txt` |
+| `niveaux.txt` | Les cartes des niveaux, en texte |
 
 Couleurs : les coeurs sont rouges, les pièces dorées et le feu orange ; le reste du jeu reste en noir et blanc.
 
 Les scripts autres que `main.gd`, `player.gd` et `canvas_layer.gd` ne s'attachent à aucun nœud : `main.gd` les charge.
+
+## Installation sur iPad (Xogot)
+
+La version gratuite de Xogot limite le projet à **200 Ko** de scripts et de scènes.
+Les scripts à la racine sont donc **compactés** (sans commentaires ni espaces inutiles) : environ 180 Ko.
+
+Fichiers à mettre dans le projet (à la racine `res://`) :
+- les 13 scripts `.gd` de la racine
+- `main.tscn`
+- **`niveaux.txt`** (les cartes des niveaux ; un fichier texte ne compte pas dans la limite)
+
+Ne copiez **pas** les dossiers `source/` et `outils/` dans le projet iPad.
+
+- `source/` : les mêmes scripts, lisibles et commentés (pour lire ou modifier le code).
+- `outils/compacter.py` : refabrique les scripts compacts à partir de `source/`.
+- `outils/niveaux.py` : refabrique `niveaux.txt` à partir des morceaux de niveaux.
+
+Pour exporter le jeu plus tard : dans les préréglages d'export, ajouter `*.txt` aux fichiers non-ressources à inclure.
 
 ## Si l'écran devient noir
 
@@ -48,7 +67,7 @@ Pour régler l'obscurité de chaque monde : `const DARKNESS` juste en dessous.
 
 ## Modifier un niveau
 
-Ouvrir `levels.gd` : chaque niveau est un dessin en texte, 1 caractère = 1 case de 32 px.
+Ouvrir `niveaux.txt` : chaque niveau est un dessin en texte, 1 caractère = 1 case de 32 px.
 La légende est en haut du fichier. Toutes les lignes d'un niveau doivent avoir la même longueur.
 
 ## Contrôles au clavier (pour tester sur ordinateur)
